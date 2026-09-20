@@ -16,7 +16,7 @@ SYMBOLS = [
     "FILUSDT","NEARUSDT","APTUSDT","ARBUSDT","SUIUSDT"
 ]
 
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
+BINANCE_URL = "https://data-api.binance.vision/api/v3/klines"
 
 
 def get_klines(symbol, interval, limit=200):
