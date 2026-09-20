@@ -133,7 +133,7 @@ def get_markets():
 
         if not symbol:
             continue
-  
+
         symbol = str(symbol).upper()
 
         base_asset = (
