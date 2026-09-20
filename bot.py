@@ -9,8 +9,6 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TABDEAL_BASE = "https://api1.tabdeal.org/r/api/v1"
 
-# فقط بازارهای تبدیل
-QUOTE_PRIORITY = ["USDT", "IRT"]
 
 def tabdeal_get(endpoint, params=None):
     r = requests.get(
@@ -48,7 +46,6 @@ def get_markets():
 
         symbol = str(symbol).upper()
 
-        # فقط بازارهای USDT و IRT
         if symbol.endswith("USDT") or symbol.endswith("IRT"):
             result.append(symbol)
 
@@ -65,11 +62,9 @@ def get_trades(symbol, limit=1000):
     )
 
     if isinstance(data, dict):
-        trades = data.get("data", data.get("trades", []))
-    else:
-        trades = data
+        return data.get("data", data.get("trades", []))
 
-    return trades
+    return data
 
 
 def trades_to_candles(trades, minutes):
@@ -79,17 +74,12 @@ def trades_to_candles(trades, minutes):
         if not isinstance(t, dict):
             continue
 
-        price = (
-            t.get("price")
-            or t.get("p")
-        )
-
+        price = t.get("price") or t.get("p")
         quantity = (
             t.get("qty")
             or t.get("quantity")
             or t.get("q")
         )
-
         trade_time = (
             t.get("time")
             or t.get("timestamp")
@@ -104,7 +94,6 @@ def trades_to_candles(trades, minutes):
             quantity = float(quantity)
             trade_time = int(float(trade_time))
 
-            # تبدیل timestamp ثانیه به میلی‌ثانیه
             if trade_time < 10_000_000_000:
                 trade_time *= 1000
 
@@ -121,7 +110,7 @@ def trades_to_candles(trades, minutes):
         except Exception:
             continue
 
-    if len(rows) < 20:
+    if len(rows) < 30:
         return None
 
     df = pd.DataFrame(rows)
@@ -133,13 +122,14 @@ def trades_to_candles(trades, minutes):
     candles = df["price"].resample(rule).ohlc()
     candles["volume"] = df["volume"].resample(rule).sum()
 
-    candles = candles.dropna()
-
-    return candles
+    return candles.dropna()
 
 
 def ema(s, n):
-    return s.ewm(span=n, adjust=False).mean()
+    return s.ewm(
+        span=n,
+        adjust=False
+    ).mean()
 
 
 def rsi(s, n=14):
@@ -182,6 +172,19 @@ def macd(s):
     return line, signal, line - signal
 
 
+def prepare(df):
+    df = df.copy()
+
+    df["ema20"] = ema(df["close"], 20)
+    df["ema50"] = ema(df["close"], 50)
+    df["rsi"] = rsi(df["close"])
+    df["atr"] = atr(df)
+
+    df["vol_ma"] = df["volume"].rolling(20).mean()
+
+    return df
+
+
 def analyze(symbol):
     trades = get_trades(symbol, 1000)
 
@@ -191,90 +194,145 @@ def analyze(symbol):
     if d5 is None or d15 is None:
         return None
 
+    # برای EMA50 و MACD داده کافی لازم است
     if len(d5) < 55 or len(d15) < 55:
         return None
 
-    for d in (d5, d15):
-        d["ema20"] = ema(d["close"], 20)
-        d["ema50"] = ema(d["close"], 50)
-        d["rsi"] = rsi(d["close"])
-        d["atr"] = atr(d)
+    d5 = prepare(d5)
+    d15 = prepare(d15)
 
-        d["vol_ma"] = d["volume"].rolling(20).mean()
+    _, _, macd_hist = macd(d15["close"])
+    d15["macd_hist"] = macd_hist
 
-    mline, msignal, mhist = macd(d15["close"])
-    d15["macd_hist"] = mhist
-
-    a15 = d15.iloc[-2]
+    # آخرین کندل کامل
     a5 = d5.iloc[-2]
+    a15 = d15.iloc[-2]
 
     long_score = 0
     short_score = 0
 
-    lr = []
-    sr = []
+    long_reasons = []
+    short_reasons = []
+
+    # -------------------------
+    # روند 15 دقیقه
+    # -------------------------
 
     if a15["ema20"] > a15["ema50"]:
         long_score += 20
-        lr.append("روند 15 دقیقه صعودی")
+        long_reasons.append("روند 15 دقیقه صعودی")
 
     if a15["ema20"] < a15["ema50"]:
         short_score += 20
-        sr.append("روند 15 دقیقه نزولی")
+        short_reasons.append("روند 15 دقیقه نزولی")
 
-    if a15["rsi"] > 50:
+    # -------------------------
+    # RSI سخت‌گیرانه‌تر
+    # -------------------------
+
+    if a15["rsi"] >= 52:
         long_score += 15
-        lr.append("RSI مثبت")
+        long_reasons.append("RSI مثبت")
 
-    if a15["rsi"] < 50:
+    if a15["rsi"] <= 48:
         short_score += 15
-        sr.append("RSI منفی")
+        short_reasons.append("RSI منفی")
+
+    # -------------------------
+    # MACD
+    # -------------------------
 
     if a15["macd_hist"] > 0:
         long_score += 20
-        lr.append("MACD مثبت")
+        long_reasons.append("MACD مثبت")
 
     if a15["macd_hist"] < 0:
         short_score += 20
-        sr.append("MACD منفی")
+        short_reasons.append("MACD منفی")
 
-    if a5["close"] > a5["ema20"]:
-        long_score += 15
-        lr.append("قیمت 5 دقیقه بالای EMA20")
-
-    if a5["close"] < a5["ema20"]:
-        short_score += 15
-        sr.append("قیمت 5 دقیقه زیر EMA20")
+    # -------------------------
+    # تأیید تایم‌فریم 5 دقیقه
+    # -------------------------
 
     if (
-        pd.notna(a5["vol_ma"])
-        and a5["volume"] > a5["vol_ma"] * 1.2
+        a5["close"] > a5["ema20"]
+        and a5["ema20"] > a5["ema50"]
     ):
-        if a5["close"] > a5["open"]:
-            long_score += 15
-            lr.append("حجم بالاتر از میانگین")
-
-        elif a5["close"] < a5["open"]:
-            short_score += 15
-            sr.append("حجم بالاتر از میانگین")
-
-    if a5["rsi"] >= 52:
         long_score += 15
-        lr.append("مومنتوم 5 دقیقه‌ای")
+        long_reasons.append(
+            "قیمت و EMAهای 5 دقیقه صعودی"
+        )
 
-    if a5["rsi"] <= 48:
+    if (
+        a5["close"] < a5["ema20"]
+        and a5["ema20"] < a5["ema50"]
+    ):
         short_score += 15
-        sr.append("مومنتوم 5 دقیقه‌ای")
+        short_reasons.append(
+            "قیمت و EMAهای 5 دقیقه نزولی"
+        )
+
+    # -------------------------
+    # حجم
+    # -------------------------
+
+    volume_confirmed = False
+
+    if pd.notna(a5["vol_ma"]):
+        if a5["volume"] > a5["vol_ma"] * 1.2:
+            volume_confirmed = True
+
+            if a5["close"] > a5["open"]:
+                long_score += 15
+                long_reasons.append(
+                    "حجم بالاتر از میانگین"
+                )
+
+            elif a5["close"] < a5["open"]:
+                short_score += 15
+                short_reasons.append(
+                    "حجم بالاتر از میانگین"
+                )
+
+    # -------------------------
+    # مومنتوم
+    # -------------------------
+
+    if a5["rsi"] >= 55:
+        long_score += 15
+        long_reasons.append(
+            "مومنتوم 5 دقیقه‌ای قوی"
+        )
+
+    if a5["rsi"] <= 45:
+        short_score += 15
+        short_reasons.append(
+            "مومنتوم 5 دقیقه‌ای قوی"
+        )
 
     price = float(a5["close"])
-    a = float(a5["atr"])
+    atr_value = float(a5["atr"])
 
-    if not np.isfinite(a) or a <= 0:
+    if not np.isfinite(atr_value) or atr_value <= 0:
         return None
 
-    if long_score >= 75 and long_score > short_score:
+    # -------------------------
+    # فیلتر نهایی LONG
+    # -------------------------
 
-        stop = price - 1.2 * a
+    long_structure = (
+        a15["ema20"] > a15["ema50"]
+        and a15["macd_hist"] > 0
+        and a15["rsi"] >= 52
+        and a5["close"] > a5["ema20"]
+    )
+
+    if (
+        long_structure
+        and long_score >= 80
+        and long_score > short_score
+    ):
+        stop = price - 1.2 * atr_value
         risk = price - stop
 
         return (
@@ -284,12 +342,26 @@ def analyze(symbol):
             stop,
             price + 1.5 * risk,
             price + 2.5 * risk,
-            lr
+            long_reasons
         )
 
-    if short_score >= 75 and short_score > long_score:
+    # -------------------------
+    # فیلتر نهایی SHORT
+    # -------------------------
 
-        stop = price + 1.2 * a
+    short_structure = (
+        a15["ema20"] < a15["ema50"]
+        and a15["macd_hist"] < 0
+        and a15["rsi"] <= 48
+        and a5["close"] < a5["ema20"]
+    )
+
+    if (
+        short_structure
+        and short_score >= 80
+        and short_score > long_score
+    ):
+        stop = price + 1.2 * atr_value
         risk = stop - price
 
         return (
@@ -299,7 +371,7 @@ def analyze(symbol):
             stop,
             price - 1.5 * risk,
             price - 2.5 * risk,
-            sr
+            short_reasons
         )
 
     return None
@@ -332,6 +404,7 @@ def main():
 
     try:
         symbols = get_markets()
+
     except Exception as e:
         send(
             "❌ خطا در دریافت بازارهای صرافی تبدیل\n\n"
@@ -341,7 +414,7 @@ def main():
 
     found = []
 
-    # محدودیت برای جلوگیری از فشار زیاد به API
+    # حداکثر 60 بازار برای جلوگیری از فشار زیاد به API
     symbols = symbols[:60]
 
     for symbol in symbols:
@@ -353,34 +426,62 @@ def main():
                 found.append((symbol, result))
 
         except Exception as e:
-            print("ERROR", symbol, e)
+            print(
+                "ERROR",
+                symbol,
+                str(e)
+            )
 
     now = datetime.now(
         timezone.utc
     ).strftime("%Y-%m-%d %H:%M UTC")
+
+    # -------------------------
+    # بدون سیگنال
+    # -------------------------
 
     if not found:
 
         send(
             "🔎 اسکن صرافی تبدیل انجام شد\n\n"
             "در این اسکن سیگنال قوی پیدا نشد.\n\n"
-            f"تعداد بازارهای بررسی‌شده: {len(symbols)}\n"
-            f"زمان: {now}"
+            f"📊 بازارهای بررسی‌شده: {len(symbols)}\n"
+            "🎯 حداقل امتیاز سیگنال: 80/100\n"
+            "⏱ تایم‌فریم: 5m + 15m\n"
+            f"🕐 زمان: {now}\n\n"
+            "⚠️ نبودن سیگنال به معنی نبودن فرصت قطعی "
+            "در بازار نیست؛ فیلترهای ربات سخت‌گیرانه‌تر شده‌اند."
         )
 
         return
 
-    for symbol, s in found:
+    # -------------------------
+    # ارسال سیگنال‌ها
+    # -------------------------
 
-        side, score, entry, stop, tp1, tp2, reasons = s
+    for symbol, result in found:
 
-        emoji = "🟢" if side == "LONG" else "🔴"
+        (
+            side,
+            score,
+            entry,
+            stop,
+            tp1,
+            tp2,
+            reasons
+        ) = result
+
+        emoji = (
+            "🟢"
+            if side == "LONG"
+            else "🔴"
+        )
 
         text = (
             f"{emoji} فرصت {side}\n"
             f"🏦 صرافی: تبدیل\n"
-            f"ارز: {symbol}\n"
-            f"تایم‌فریم: 5m + 15m\n\n"
+            f"💰 ارز: {symbol}\n"
+            f"⏱ تایم‌فریم: 5m + 15m\n\n"
 
             f"📍 ورود: {fmt(entry)}\n"
             f"🛑 حد ضرر: {fmt(stop)}\n"
@@ -391,11 +492,13 @@ def main():
 
             "دلایل:\n"
             + "\n".join(
-                "✅ " + x for x in reasons
+                "✅ " + x
+                for x in reasons
             )
 
             + "\n\n"
-            "⚠️ این فقط تحلیل بازار است و تضمین سود نیست."
+            "⚠️ این فقط تحلیل بازار است و "
+            "تضمین سود یا توصیه معاملاتی نیست."
         )
 
         send(text)
