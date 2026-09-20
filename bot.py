@@ -134,7 +134,7 @@ def get_markets():
         if not symbol:
             continue
 
-        symbol = str(symbol).replace("_", "").upper()
+  symbol = str(symbol).upper()
 
         base_asset = (
             market.get("baseAsset")
