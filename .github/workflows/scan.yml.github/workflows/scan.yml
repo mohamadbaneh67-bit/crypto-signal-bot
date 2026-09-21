@@ -1,4 +1,4 @@
-name: Crypto Signal Scan
+name: Tabdeal Signal Bot
 
 on:
   workflow_dispatch:
@@ -6,26 +6,28 @@ on:
     - cron: "*/5 * * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Get code
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install packages
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run bot
-        run: python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python bot.py
