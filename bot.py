@@ -229,7 +229,9 @@ def get_trades(symbol):
             data = data["result"]
 
     if not isinstance(data, list):
-    return []
+        return []
+
+    return data
 
 if data:
     print("نمونه معامله تبدیل:", data[-1])
