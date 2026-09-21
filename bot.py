@@ -929,7 +929,7 @@ def main():
                 f"بررسی {symbol}"
             )
 
-            trades = get_trades(symbol)
+            trades = get_trades(market["tabdeal_symbol"])
 
             if not trades:
 
