@@ -89,9 +89,12 @@
     "tp1": 0.0016724783872923477,
     "tp2": 0.0016827973121539132,
     "signal_time_ms": 1790059290134,
-    "status": "OPEN",
-    "result": null,
-    "created_at": "2026-09-22T07:14:13.785589+00:00"
+    "status": "SL",
+    "result": "نادرست",
+    "created_at": "2026-09-22T07:14:13.785589+00:00",
+    "hit_price": 0.001646,
+    "closed_time": "2026-09-22T07:33:08.092000+00:00",
+    "duration_minutes": 51.63
   },
   {
     "symbol": "PONKEUSDT",
@@ -115,9 +118,12 @@
     "tp1": 0.04260936858505294,
     "tp2": 0.04292228097508823,
     "signal_time_ms": 1790060770069,
-    "status": "OPEN",
-    "result": null,
-    "created_at": "2026-09-22T07:49:41.639207+00:00"
+    "status": "TP1",
+    "result": "درست",
+    "created_at": "2026-09-22T07:49:41.639207+00:00",
+    "hit_price": 0.04265,
+    "closed_time": "2026-09-22T07:58:51.844000+00:00",
+    "duration_minutes": 52.7
   },
   {
     "symbol": "DENTUSDT",
@@ -141,8 +147,50 @@
     "tp1": 3.0474355234156008e-05,
     "tp2": 3.072752539026002e-05,
     "signal_time_ms": 1790062366372,
+    "status": "SL",
+    "result": "نادرست",
+    "created_at": "2026-09-22T07:49:43.884851+00:00",
+    "hit_price": 2.98042e-05,
+    "closed_time": "2026-09-22T07:35:19.284000+00:00",
+    "duration_minutes": 2.55
+  },
+  {
+    "symbol": "ETHIRT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 636983123.0,
+    "stop": 634826206.7558632,
+    "tp1": 640218497.3662052,
+    "tp2": 642375413.610342,
+    "signal_time_ms": 1790066966376,
     "status": "OPEN",
     "result": null,
-    "created_at": "2026-09-22T07:49:43.884851+00:00"
+    "created_at": "2026-09-22T09:08:50.775057+00:00"
+  },
+  {
+    "symbol": "ENJUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.02819,
+    "stop": 0.027930303755342435,
+    "tp1": 0.02857954436698635,
+    "tp2": 0.02883924061164391,
+    "signal_time_ms": 1790065950899,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T09:08:51.938859+00:00"
+  },
+  {
+    "symbol": "WIFUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.262,
+    "stop": 0.2587632605875833,
+    "tp1": 0.2668551091186251,
+    "tp2": 0.27009184853104173,
+    "signal_time_ms": 1790067218628,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T09:08:53.125091+00:00"
   }
 ]
