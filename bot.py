@@ -80,11 +80,41 @@ def market_priority(m):
         return (0 if quote == "USDT" else 1 if quote == "IRT" else 2, p)
     return (3 if quote == "USDT" else 4 if quote == "IRT" else 5, 999)
 
-def get_trades(symbol):
-    data = tabdeal_get("trades", {"symbol": symbol, "limit": TRADE_LIMIT})
-    if isinstance(data, dict):
-        data = data.get("data", data.get("result", []))
-    return data if isinstance(data, list) else []
+def get_trades(symbol, tabdeal_symbol=None):
+    """Get recent public trades using Tabdeal's canonical symbol first.
+
+    Tabdeal documents both symbol (e.g. BTCUSDT) and tabdealSymbol (e.g. BTC_USDT).
+    Some markets may reject the underscore form, so we try the canonical symbol first
+    and fall back to tabdealSymbol only when needed.
+    """
+    candidates = []
+    for value in (symbol, tabdeal_symbol):
+        if value:
+            value = str(value).upper()
+            if value not in candidates:
+                candidates.append(value)
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            data = tabdeal_get(
+                "trades",
+                {"symbol": candidate, "limit": TRADE_LIMIT},
+            )
+            if isinstance(data, dict):
+                data = data.get("data", data.get("result", []))
+            if isinstance(data, list):
+                return data
+        except requests.HTTPError as e:
+            last_error = e
+            continue
+        except Exception as e:
+            last_error = e
+            continue
+
+    if last_error:
+        raise last_error
+    return []
 
 def tv(t, *keys):
     for k in keys:
@@ -282,7 +312,7 @@ def evaluate_history(history, markets):
             continue
 
         try:
-            trades = get_trades(m["tabdeal_symbol"])
+            trades = get_trades(m["symbol"], m["tabdeal_symbol"])
         except Exception:
             continue
 
@@ -359,7 +389,7 @@ def main():
     signals = []
     for m in sorted(market_list, key=market_priority):
         try:
-            trades = get_trades(m["tabdeal_symbol"])
+            trades = get_trades(m["symbol"], m["tabdeal_symbol"])
             if trades:
                 s = analyze_market(m, trades)
                 if s:
@@ -396,4 +426,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+        
