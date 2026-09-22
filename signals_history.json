@@ -73,9 +73,12 @@
     "tp1": 353839.7083047191,
     "tp2": 355224.1805078652,
     "signal_time_ms": 1790060083272,
-    "status": "OPEN",
-    "result": null,
-    "created_at": "2026-09-22T07:14:12.605924+00:00"
+    "status": "SL",
+    "result": "نادرست",
+    "created_at": "2026-09-22T07:14:12.605924+00:00",
+    "hit_price": 349999.0,
+    "closed_time": "2026-09-22T07:03:15.365000+00:00",
+    "duration_minutes": 8.53
   },
   {
     "symbol": "RSRUSDT",
@@ -102,5 +105,44 @@
     "status": "OPEN",
     "result": null,
     "created_at": "2026-09-22T07:14:15.200270+00:00"
+  },
+  {
+    "symbol": "SANDUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.04214,
+    "stop": 0.0418270876099647,
+    "tp1": 0.04260936858505294,
+    "tp2": 0.04292228097508823,
+    "signal_time_ms": 1790060770069,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:49:41.639207+00:00"
+  },
+  {
+    "symbol": "DENTUSDT",
+    "direction": "SHORT",
+    "score": 100,
+    "entry": 6.87e-05,
+    "stop": 7.021824661642254e-05,
+    "tp1": 6.64226300753662e-05,
+    "tp2": 6.490438345894366e-05,
+    "signal_time_ms": 1790061141210,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:49:42.761196+00:00"
+  },
+  {
+    "symbol": "FLOKIUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 3.00946e-05,
+    "stop": 2.9841429843895996e-05,
+    "tp1": 3.0474355234156008e-05,
+    "tp2": 3.072752539026002e-05,
+    "signal_time_ms": 1790062366372,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:49:43.884851+00:00"
   }
 ]
