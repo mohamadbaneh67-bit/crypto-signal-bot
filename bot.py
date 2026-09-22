@@ -15,16 +15,28 @@ SESSION = requests.Session()
 REQUEST_TIMEOUT = 20
 TRADE_LIMIT = 1000
 REQUEST_SLEEP = 0.12
-MAX_SIGNALS = 5
+
 HISTORY_FILE = "signals_history.json"
 HISTORY_MAX = 500
 SIGNAL_TTL_HOURS = 24
 
+# فقط 5 ارز اصلی برای تحلیل
 IMPORTANT_COINS = [
-    "BTC","ETH","DOGE","SOL","XRP","BNB","ADA","TRX","AVAX","LINK",
-    "DOT","LTC","BCH","ATOM","ETC","FIL","NEAR","APT","ARB","SUI",
-    "MATIC","UNI","AAVE","PEPE","SHIB"
+    "BTC",
+    "ETH",
+    "SOL",
+    "XRP",
+    "DOGE"
 ]
+
+# فقط سیگنال‌های قوی ارسال شوند
+MIN_SIGNAL_SCORE = 85
+
+# حداکثر تعداد سیگنال در هر اجرای ربات
+MAX_SIGNALS = 2
+
+# حداقل نوسان مورد نیاز نسبت به قیمت
+MIN_ATR_PERCENT = 0.12
 
 def tabdeal_get(endpoint, params=None):
     r = SESSION.get(f"{TABDEAL_BASE}/{endpoint}",
@@ -206,10 +218,32 @@ def analyze_market(market, trades):
 
     if a5.rsi >= 52: long_score += 15; lr.append("مومنتوم 5 دقیقه‌ای")
     if a5.rsi <= 48: short_score += 15; sr.append("مومنتوم 5 دقیقه‌ای")
+# قدرت حرکت اخیر قیمت
+recent_move = (
+    abs(float(a5.close) - float(d5.iloc[-6]["close"]))
+    / float(d5.iloc[-6]["close"])
+) * 100
 
+# حرکت خیلی ضعیف را حذف کن
+if recent_move < 0.10:
+    return None
+
+# شکست کوتاه‌مدت
+recent_high = float(d5.iloc[-7:-1]["high"].max())
+recent_low = float(d5.iloc[-7:-1]["low"].min())
+
+if float(a5.close) > recent_high:
+    long_score += 10
+    lr.append("شکست سقف کوتاه‌مدت")
+
+if float(a5.close) < recent_low:
+    short_score += 10
+    sr.append("شکست کف کوتاه‌مدت")
     entry, av = float(a5.close), float(a5.atr)
-    if not np.isfinite(av) or av <= 0:
+        atr_percent = (av / entry) * 100
+    if atr_percent < MIN_ATR_PERCENT:
         return None
+        
 
     if long_score >= 75 and long_score > short_score:
         direction, score, reasons = "LONG", long_score, lr
