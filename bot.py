@@ -1,875 +1,540 @@
+"""
+ربات سیگنال معاملاتی - نسخه تنها-Tabdeal
+====================================
+Tabdeal هیچ endpoint کندل/کلاین تاریخی ندارد (فقط trades با پارامتر limit،
+بدون بازه زمانی). پس گرفتن ۶ ماه کندل واقعی در یک اجرا از Tabdeal ممکن نیست.
+
+راه‌حل: این ربات هر بار که اجرا می‌شود، آخرین معاملات را می‌گیرد و در یک فایل
+محلی (candle_store.json) ذخیره می‌کند. با گذشت روزها/هفته‌ها، این فایل خودش
+تبدیل به یک آرشیو واقعی قیمت می‌شود که بک‌تست و تحلیل چندتایم‌فریمی روی آن
+انجام می‌شود.
+
+نکته مهم: تا وقتی آرشیو به اندازه کافی نرسیده (به‌طور پیش‌فرض حداقل ~55 روز،
+چون فیلتر روند روزانه به این مقدار داده نیاز دارد)، ربات فقط داده جمع می‌کند
+و سیگنالی نمی‌فرستد. این عمدی است؛ سیگنال دادن بدون پشتوانه تاریخی همان مشکلی
+بود که باعث برد کم می‌شد.
+
+باید این اسکریپت را مرتب (مثلاً هر 5 تا 15 دقیقه، با cron) اجرا کنید تا
+آرشیو کامل شود.
+"""
+
 import os
 import json
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
 import requests
 
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# ---------------- CONFIG ----------------
+TELEGRAM_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 TABDEAL_BASE = "https://api1.tabdeal.org/r/api/v1"
+SESSION = requests.Session()
+REQUEST_TIMEOUT = 20
 
-COINS = ["BTC", "ETH", "BNB", "SOL", "XRP"]
+# فقط این 5 ارز رصد می‌شوند - بر اساس حجم/نقدشوندگی. هر وقت خواستی عوض کن.
+TOP5 = ["BTC", "ETH", "BNB", "SOL", "XRP"]
 QUOTE = "USDT"
 
-TRADE_LIMIT = 1000
-TIMEOUT = 20
+TRADE_LIMIT = 1000                 # حداکثر معاملاتی که هر بار از Tabdeal می‌گیریم
+BASE_CANDLE_MINUTES = 5            # ریزترین کندلی که از معاملات خام می‌سازیم
 
-MIN_SCORE = 70
-MAX_SIGNALS = 2
+CANDLE_STORE_FILE = "candle_store.json"
+STORE_MAX_DAYS = 210               # آرشیو را حدوداً هم‌ارز ۷ ماه نگه می‌داریم، مازاد حذف می‌شود
 
-HISTORY_FILE = "signals_history.json"
+MIN_HISTORY_DAYS = 55              # حداقل عمر آرشیو قبل از فعال‌شدن سیگنال‌دهی
+BACKTEST_HORIZON_BARS = 48         # حداکثر کندل ۱ساعته (~۲ روز) برای رسیدن به TP/SL در بک‌تست
+BACKTEST_MIN_TRADES = 15           # حداقل نمونه بک‌تست‌شده برای اعتماد آماری
+BACKTEST_MIN_WINRATE = 0.55        # زیر این نرخ برد، سیگنال زنده صادر نمی‌شود
 
-session = requests.Session()
-
-
-def tabdeal_api(endpoint, params=None):
-    url = TABDEAL_BASE + "/" + endpoint
-
-    response = session.get(
-        url,
-        params=params or {},
-        timeout=TIMEOUT
-    )
-
-    response.raise_for_status()
-    return response.json()
+SIGNAL_SCORE_MIN = 60
+SIGNALS_HISTORY_FILE = "signals_history.json"
+SIGNALS_HISTORY_MAX = 500
+SIGNAL_TTL_HOURS = 24
 
 
-def send_telegram(message):
-    if not TELEGRAM_TOKEN:
-        print("TELEGRAM_BOT_TOKEN وجود ندارد.")
-        return False
-
-    if not CHAT_ID:
-        print("TELEGRAM_CHAT_ID وجود ندارد.")
-        return False
-
-    url = "https://api.telegram.org/bot" + TELEGRAM_TOKEN + "/sendMessage"
-
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-
-    response = session.post(
-        url,
-        json=data,
-        timeout=TIMEOUT
-    )
-
-    print("Telegram HTTP:", response.status_code)
-
-    if not response.ok:
-        print("Telegram:", response.text)
-        return False
-
-    print("پیام تلگرام ارسال شد.")
-    return True
+# ---------------- HTTP ----------------
+def tabdeal_get(endpoint, params=None):
+    r = SESSION.get(f"{TABDEAL_BASE}/{endpoint}", params=params or {}, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
 
-def get_value(data, *names):
-    if not isinstance(data, dict):
-        return None
+def get_tabdeal_markets():
+    data = tabdeal_get("exchangeInfo")
+    markets = data.get("symbols", data.get("data", data.get("result", []))) if isinstance(data, dict) else data
+    if not isinstance(markets, list):
+        return {}
+    out = {}
+    for m in markets:
+        if not isinstance(m, dict):
+            continue
+        if str(m.get("status", "TRADING")).upper() != "TRADING":
+            continue
+        base = str(m.get("baseAsset") or "").upper()
+        quote = str(m.get("quoteAsset") or "").upper()
+        symbol = str(m.get("symbol") or "").upper()
+        tabdeal_symbol = str(m.get("tabdealSymbol", symbol))
+        if base and quote:
+            out[(base, quote)] = {"symbol": symbol, "tabdeal_symbol": tabdeal_symbol}
+    return out
 
-    for name in names:
-        if data.get(name) is not None:
-            return data.get(name)
 
+def tv(t, *keys):
+    for k in keys:
+        if t.get(k) is not None:
+            return t[k]
     return None
 
 
-def to_number(value):
+def trade_time_ms(t):
+    x = tv(t, "time", "timestamp", "T", "createdAt", "created_at")
+    if x is None:
+        return None
     try:
-        if value is None or value == "":
-            return None
-
-        return float(value)
-
-    except (TypeError, ValueError):
+        x = float(x)
+        return int(x * 1000 if x < 10_000_000_000 else x)
+    except Exception:
         return None
 
 
-def get_timestamp(data):
-    value = to_number(
-        get_value(
-            data,
-            "time",
-            "timestamp",
-            "T",
-            "createdAt",
-            "created_at"
-        )
-    )
-
-    if value is None:
-        return None
-
-    if value < 10000000000:
-        value = value * 1000
-
-    return int(value)
-
-
-def get_list(data):
-    if isinstance(data, list):
-        return data
-
-    if isinstance(data, dict):
-        for key in ["data", "result", "items", "symbols"]:
-            value = data
-            def analyze_market(market, trades):
-    candles_5m = make_candles(trades, 5)
-    candles_15m = make_candles(trades, 15)
-
-    print(
-        market["base"],
-        "5m:",
-        len(candles_5m),
-        "15m:",
-        len(candles_15m)
-    )
-
-    if len(candles_5m) < 60:
-        print(
-            market["base"],
-            "داده 5 دقیقه‌ای کافی نیست."
-        )
-        return None
-
-    if len(candles_15m) < 30:
-        print(
-            market["base"],
-            "داده 15 دقیقه‌ای کافی نیست."
-        )
-        return None
-
-    candles_5m = add_indicators(candles_5m)
-    candles_15m = add_indicators(candles_15m)
-
-    current_5m = candles_5m.iloc[-2]
-    current_15m = candles_15m.iloc[-2]
-
-    long_score = 0
-    short_score = 0
-
-    long_reasons = []
-    short_reasons = []
-
-    if current_15m["ema20"] > current_15m["ema50"]:
-        long_score += 20
-        long_reasons.append("روند 15 دقیقه‌ای صعودی")
-
-    elif current_15m["ema20"] < current_15m["ema50"]:
-        short_score += 20
-        short_reasons.append("روند 15 دقیقه‌ای نزولی")
-
-    rsi_15 = to_number(current_15m["rsi"])
-
-    if rsi_15 is not None:
-
-        if rsi_15 > 50:
-            long_score += 15
-            long_reasons.append("RSI 15 دقیقه‌ای مثبت")
-
-        elif rsi_15 < 50:
-            short_score += 15
-            short_reasons.append("RSI 15 دقیقه‌ای منفی")
-
-    macd_15 = to_number(
-        current_15m["macd_hist"]
-    )
-
-    if macd_15 is not None:
-
-        if macd_15 > 0:
-            long_score += 20
-            long_reasons.append("MACD 15 دقیقه‌ای مثبت")
-
-        elif macd_15 < 0:
-            short_score += 20
-            short_reasons.append("MACD 15 دقیقه‌ای منفی")
-
-    close_5 = to_number(
-        current_5m["close"]
-    )
-
-    ema20_5 = to_number(
-        current_5m["ema20"]
-    )
-
-    if close_5 is not None and ema20_5 is not None:
-
-        if close_5 > ema20_5:
-            long_score += 15
-            long_reasons.append("قیمت بالای EMA20")
-
-        elif close_5 < ema20_5:
-            short_score += 15
-            short_reasons.append("قیمت زیر EMA20")
-
-    rsi_5 = to_number(
-        current_5m["rsi"]
-    )
-
-    if rsi_5 is not None:
-
-        if rsi_5 >= 52:
-            long_score += 15
-            long_reasons.append("مومنتوم 5 دقیقه‌ای صعودی")
-
-        elif rsi_5 <= 48:
-            short_score += 15
-            short_reasons.append("مومنتوم 5 دقیقه‌ای نزولی")
-
-    volume = to_number(
-        current_5m["volume"]
-    )
-
-    volume_average = to_number(
-        current_5m["volume_average"]
-    )
-
-    candle_open = to_number(
-        current_5m["open"]
-    )
-
-    if (
-        volume is not None
-        and volume_average is not None
-        and volume_average > 0
-        and volume > volume_average * 1.2
-    ):
-
-        if close_5 > candle_open:
-            long_score += 15
-            long_reasons.append("حجم معاملات بالاتر از میانگین")
-
-        elif close_5 < candle_open:
-            short_score += 15
-            short_reasons.append("حجم معاملات بالاتر از میانگین")
-
-    entry = close_5
-
-    atr_value = to_number(
-        current_5m["atr"]
-    )
-
-    if entry is None or atr_value is None:
-        return None
-
-    if entry <= 0 or atr_value <= 0:
-        return None
-
-    atr_percent = (
-        atr_value / entry
-    ) * 100
-
-    if atr_percent < 0.10:
-        print(
-            market["base"],
-            "نوسان کافی ندارد."
-        )
-        return None
-
-    if len(candles_5m) >= 8:
-
-        old_price = to_number(
-            candles_5m.iloc[-8]["close"]
-        )
-
-        if old_price is not None and old_price > 0:
-
-            price_move = (
-                abs(entry - old_price)
-                / old_price
-            ) * 100
-
-        else:
-            price_move = 0
-
-    else:
-        price_move = 0
-
-    if price_move < 0.05:
-        print(
-            market["base"],
-            "حرکت اخیر کم است."
-        )
-        return None
-
-    if len(candles_5m) >= 7:
-
-        recent_high = float(
-            candles_5m.iloc[-7:-2]["high"].max()
-        )
-
-        recent_low = float(
-            candles_5m.iloc[-7:-2]["low"].min()
-        )
-
-        if entry > recent_high:
-            long_score += 10
-            long_reasons.append("شکست سقف کوتاه‌مدت")
-
-        if entry < recent_low:
-            short_score += 10
-            short_reasons.append("شکست کف کوتاه‌مدت")
-
-    if (
-        long_score >= MIN_SCORE
-        and long_score > short_score
-    ):
-
-        direction = "LONG"
-        score = min(100, int(long_score))
-        reasons = long_reasons
-
-    elif (
-        short_score >= MIN_SCORE
-        and short_score > long_score
-    ):
-
-        direction = "SHORT"
-        score = min(100, int(short_score))
-        reasons = short_reasons
-
-    else:
-
-        print(
-            market["base"],
-            "سیگنال معتبر نیست.",
-            "LONG=",
-            long_score,
-            "SHORT=",
-            short_score
-        )
-
-        return None
-
-    if direction == "LONG":
-
-        stop = entry - (
-            atr_value * 1.2
-        )
-
-        risk = entry - stop
-
-        take_profit_1 = entry + (
-            risk * 1.5
-        )
-
-        take_profit_2 = entry + (
-            risk * 2.5
-        )
-
-    else:
-
-        stop = entry + (
-            atr_value * 1.2
-        )
-
-        risk = stop - entry
-
-        take_profit_1 = entry - (
-            risk * 1.5
-        )
-
-        take_profit_2 = entry - (
-            risk * 2.5
-        )
-
-    timestamp = get_timestamp(
-        trades[-1]
-    ) if trades else None
-
-    if timestamp is None:
-        timestamp = int(
-            datetime.now(
-                timezone.utc
-            ).timestamp() * 1000
-        )
-
-    return {
-        "base": market["base"],
-        "quote": market["quote"],
-        "symbol": market["symbol"],
-        "direction": direction,
-        "score": score,
-        "entry": entry,
-        "stop": stop,
-        "tp1": take_profit_1,
-        "tp2": take_profit_2,
-        "atr_percent": atr_percent,
-        "price_move": price_move,
-        "signal_time": timestamp,
-        "reasons": reasons
-    }
-
-
-def format_price(value):
-    value = to_number(value)
-
-    if value is None:
-        return "-"
-
-    if value >= 1000:
-        return f"{value:,.2f}"
-
-    if value >= 1:
-        return f"{value:,.4f}"
-
-    if value >= 0.01:
-        return f"{value:,.6f}"
-
-    return f"{value:.8f}"
-
-
-def format_percent(value):
-    value = to_number(value)
-
-    if value is None:
-        return "-"
-
-    return f"{value:.2f}%"
-
-
-def create_signal_message(signal):
-
-    if signal["direction"] == "LONG":
-        direction = "خرید / LONG"
-    else:
-        direction = "فروش / SHORT"
-
-    reasons = signal.get(
-        "reasons",
-        []
-    )
-
-    if reasons:
-        reason_text = "\n".join(
-            "- " + reason
-            for reason in reasons
-        )
-    else:
-        reason_text = "- ترکیب شاخص‌های تکنیکال"
-
-    lines = [
-        "🚨 سیگنال جدید Tabdeal",
-        "",
-        "ارز: " + signal["base"] + "/" + signal["quote"],
-        "جهت: " + direction,
-        "امتیاز: " + str(signal["score"]) + " از 100",
-        "",
-        "💰 ورود:",
-        format_price(signal["entry"]),
-        "",
-        "🛑 حد ضرر:",
-        format_price(signal["stop"]),
-        "",
-        "🎯 هدف سود اول:",
-        format_price(signal["tp1"]),
-        "",
-        "🎯 هدف سود دوم:",
-        format_price(signal["tp2"]),
-        "",
-        "📊 ATR: " + format_percent(signal["atr_percent"]),
-        "📈 حرکت اخیر: " + format_percent(signal["price_move"]),
-        "",
-        "🔎 دلایل:",
-        reason_text,
-        "",
-        "⚠️ این ربات فقط تحلیل ارائه می‌کند و معامله انجام نمی‌دهد."
-    ]
-
-    return "\n".join(lines)
-
-
-def load_history():
-
-    try:
-
-        with open(
-            HISTORY_FILE,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            data = json.load(file)
-
+def get_trades(symbol, tabdeal_symbol=None):
+    """آخرین معاملات عمومی. symbol را اول امتحان می‌کند، بعد tabdeal_symbol."""
+    candidates = []
+    for value in (symbol, tabdeal_symbol):
+        if value:
+            value = str(value).upper()
+            if value not in candidates:
+                candidates.append(value)
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            data = tabdeal_get("trades", {"symbol": candidate, "limit": TRADE_LIMIT})
+            if isinstance(data, dict):
+                data = data.get("data", data.get("result", []))
             if isinstance(data, list):
-                return data
 
-    except (
-        FileNotFoundError,
-        json.JSONDecodeError
-    ):
-        pass
-
+return data
+        except Exception as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
     return []
 
 
-def save_history(history):
-
-    with open(
-        HISTORY_FILE,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            history[-500:],
-            file,
-            ensure_ascii=False,
-            indent=2
-        )
-
-
-def is_duplicate(signal, history):
-
-    for old_signal in history:
-
-        if not isinstance(old_signal, dict):
-            continue
-
-        if old_signal.get("base") != signal.get("base"):
-            continue
-
-        if old_signal.get("direction") != signal.get("direction"):
-            continue
-
-        old_time = to_number(
-            old_signal.get("signal_time")
-        )
-
-        new_time = to_number(
-            signal.get("signal_time")
-        )
-
-        if old_time is None or new_time is None:
-            continue
-
-        difference = abs(
-            new_time - old_time
-        )
-
-        if difference < 15 * 60 * 1000:
-            return True
-
-    return False
-    def add_signal(history, signal):
-    item = {
-        "base": signal["base"],
-        "quote": signal["quote"],
-        "symbol": signal["symbol"],
-        "direction": signal["direction"],
-        "score": signal["score"],
-        "entry": signal["entry"],
-        "stop": signal["stop"],
-        "tp1": signal["tp1"],
-        "tp2": signal["tp2"],
-        "atr_percent": signal["atr_percent"],
-        "price_move": signal["price_move"],
-        "signal_time": signal["signal_time"],
-        "status": "OPEN",
-        "result": None
-    }
-
-    history.append(item)
-
-
-def get_statistics(history):
-    total = 0
-    long_count = 0
-    short_count = 0
-    open_count = 0
-    wins = 0
-    losses = 0
-
-    for item in history:
-
-        if not isinstance(item, dict):
-            continue
-
-        total += 1
-
-        if item.get("direction") == "LONG":
-            long_count += 1
-
-        if item.get("direction") == "SHORT":
-            short_count += 1
-
-        if item.get("status") == "OPEN":
-            open_count += 1
-
-        if item.get("result") == "WIN":
-            wins += 1
-
-        if item.get("result") == "LOSS":
-            losses += 1
-
-    finished = wins + losses
-
-    if finished > 0:
-        accuracy = wins / finished * 100
-    else:
-        accuracy = 0
-
-    return {
-        "total": total,
-        "long": long_count,
-        "short": short_count,
-        "open": open_count,
-        "wins": wins,
-        "losses": losses,
-        "accuracy": accuracy
-    }
-
-
-def create_status_message(history):
-
-    stats = get_statistics(history)
-
-    lines = [
-        "🤖 وضعیت ربات تحلیل Tabdeal",
-        "",
-        "🪙 ارزهای تحت بررسی:",
-        "BTC / ETH / BNB / SOL / XRP",
-        "",
-        "⏱ تایم‌فریم:",
-        "5 دقیقه و 15 دقیقه",
-        "",
-        "📊 کل سیگنال‌ها: " + str(stats["total"]),
-        "🟢 LONG: " + str(stats["long"]),
-        "🔴 SHORT: " + str(stats["short"]),
-        "⏳ سیگنال‌های باز: " + str(stats["open"]),
-        "✅ برد: " + str(stats["wins"]),
-        "❌ باخت: " + str(stats["losses"]),
-        "🎯 دقت ثبت‌شده: " + f"{stats['accuracy']:.2f}%",
-        "",
-        "⚠️ دقت واقعی بعد از جمع شدن سیگنال‌های کافی مشخص می‌شود."
-    ]
-
-    return "\n".join(lines)
-
-
-def process_market(market, history):
-
+def get_last_price(symbol, tabdeal_symbol):
     try:
-
-        trades = get_trades(market)
-
-        if not trades:
-
-            print(
-                market["base"],
-                "معامله‌ای دریافت نشد."
-            )
-
-            return None
-
-        signal = analyze_market(
-            market,
-            trades
-        )
-
-        if signal is None:
-            return None
-
-        print(
-            "سیگنال:",
-            market["base"],
-            signal["direction"],
-            signal["score"]
-        )
-
-        if is_duplicate(
-            signal,
-            history
-        ):
-
-            print(
-                market["base"],
-                "سیگنال تکراری است."
-            )
-
-            return None
-
-        add_signal(
-            history,
-            signal
-        )
-
-        return signal
-
-    except Exception as error:
-
-        print(
-            "خطا در",
-            market.get("base", "?"),
-            ":",
-            error
-        )
-
+        trades = get_trades(symbol, tabdeal_symbol)
+    except Exception:
+        return None
+    priced = [(trade_time_ms(t), tv(t, "price", "p")) for t in trades if isinstance(t, dict)]
+    priced = [(ts, p) for ts, p in priced if ts is not None and p is not None]
+    if not priced:
+        return None
+    priced.sort(key=lambda x: x[0])
+    try:
+        return float(priced[-1][1])
+    except Exception:
         return None
 
 
-def test_telegram():
+def trades_to_candles(trades, minutes):
+    rows = []
+    for t in trades:
+        if not isinstance(t, dict):
+            continue
+        p, q, ts = tv(t, "price", "p"), tv(t, "qty", "quantity", "q", "amount", "volume"), trade_time_ms(t)
+        if p is None or ts is None:
+            continue
+        try:
+            rows.append((pd.to_datetime(ts, unit="ms", utc=True), float(p), float(q or 0)))
+        except Exception:
+            pass
+    if not rows:
+        return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+    d = pd.DataFrame(rows, columns=["time", "price", "volume"]).sort_values("time").set_index("time")
+    c = d["price"].resample(f"{minutes}min").ohlc()
+    c["volume"] = d["volume"].resample(f"{minutes}min").sum()
+    return c.dropna(subset=["open", "high", "low", "close"]).reset_index()
 
-    message = "\n".join(
-        [
-            "✅ اتصال ربات تلگرام برقرار است.",
-            "",
-            "🤖 Tabdeal Signal Bot",
-            "📊 آماده دریافت داده‌های بازار.",
-            "",
-            "🪙 BTC / ETH / BNB / SOL / XRP",
-            "⏱ 5m / 15m",
-            "",
-            "⚠️ حالت فعلی فقط تحلیل است."
-        ]
-    )
 
-    return send_telegram(message)
-
-
-def main():
-
-    print("=" * 50)
-    print("Tabdeal Signal Bot")
-    print("BTC / ETH / BNB / SOL / XRP")
-    print("5m / 15m")
-    print("=" * 50)
-
-    if not TELEGRAM_TOKEN:
-        print("خطا: TELEGRAM_BOT_TOKEN تنظیم نشده است.")
-        return
-
-    if not CHAT_ID:
-        print("خطا: TELEGRAM_CHAT_ID تنظیم نشده است.")
-        return
-
-    history = load_history()
-
-    print(
-        "تعداد سیگنال‌های ذخیره‌شده:",
-        len(history)
-    )
-
+# ---------------- LOCAL CANDLE STORE (جایگزین کلاین‌های تاریخی) ----------------
+def load_store():
     try:
+        with open(CANDLE_STORE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    store = {}
+    for base, rows in raw.items():
+        if not rows:
+            store[base] = pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
+            continue
+        df = pd.DataFrame(rows)
+        df["time"] = pd.to_datetime(df["time"], utc=True)
+        store[base] = df
+    return store
 
-        markets = get_markets()
 
-    except Exception as error:
+def save_store(store):
+    raw = {}
+    for base, df in store.items():
+        d = df.copy()
+        d["time"] = d["time"].astype(str)
+        raw[base] = d.to_dict("records")
+    with open(CANDLE_STORE_FILE, "w", encoding="utf-8") as f:
+        json.dump(raw, f, ensure_ascii=False)
 
-        print(
-            "خطا در اتصال به API Tabdeal:"
-        )
 
-        print(error)
+def merge_into_store(existing, new_candles):
+    if existing is None or existing.empty:
+        merged = new_candles
+    elif new_candles.empty:
+        merged = existing
+    else:
+        merged = pd.concat([existing, new_candles], ignore_index=True)
+    if merged.empty:
+        return merged
+    merged = merged.drop_duplicates(subset="time", keep="last").sort_values("time")
+    cutoff = pd.Timestamp.now(tz="UTC") - timedelta(days=STORE_MAX_DAYS)
+    merged = merged[merged["time"] >= cutoff].reset_index(drop=True)
+    return merged
 
-        send_telegram(
-            "❌ اتصال به API Tabdeal با خطا مواجه شد.\n\n"
-            + str(error)
-        )
 
-        return
+# ---------------- INDICATORS ----------------
+def ema(s, n):
+    return s.ewm(span=n, adjust=False).mean()
 
-    if not markets:
 
-        message = "\n".join(
-            [
-                "⚠️ ربات به Tabdeal وصل شد",
-                "اما بازارهای موردنظر پیدا نشدند.",
-                "",
-                "BTC / ETH / BNB / SOL / XRP"
-            ]
-        )
+def rsi(s, n=14):
+    d = s.diff()
+    gain = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    loss = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
+    rs = gain / loss.replace(0, np.nan)
+    return 100 - 100 / (1 + rs)
 
-        print(message)
 
-        send_telegram(message)
+def atr(d, n=14):
+    prev = d["close"].shift(1)
+    tr = pd.concat([d["high"] - d["low"], (d["high"] - prev).abs(), (d["low"] - prev).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / n, adjust=False).mean()
 
-        return
 
-    print("بازارهای پیدا شده:")
+def add_indicators(df):
+    df = df.copy()
+    df["ema20"] = ema(df["close"], 20)
+    df["ema50"] = ema(df["close"], 50)
+    df["rsi"] = rsi(df["close"])
+    df["atr"] = atr(df)
+    macd_line = ema(df["close"], 12) - ema(df["close"], 26)
+    df["macd_hist"] = macd_line - ema(macd_line, 9)
+    df["vol_ma"] = df["volume"].rolling(20).mean()
+    return df
 
-    for coin in COINS:
 
-        if coin in markets:
+def resample_ohlc(df5m, minutes):
+    if df5m.empty:
+        return df5m
+    d = df5m.set_index("time")
+    c = d["close"].resample(f"{minutes}min").ohlc()
+    c["volume"] = d["volume"].resample(f"{minutes}min").sum()
+    return c.dropna(subset=["open", "high",
 
-            print(
-                "✅",
-                coin,
-                markets[coin]["symbol"]
-            )
+"low", "close"]).reset_index()
 
-        else:
 
-            print(
-                "❌",
-                coin
-            )
+def align_timeframes(df5m):
+    d1 = add_indicators(resample_ohlc(df5m, 60 * 24)).add_prefix("d1_").rename(columns={"d1_time": "time"})
+    d4 = add_indicators(resample_ohlc(df5m, 60 * 4)).add_prefix("d4_").rename(columns={"d4_time": "time"})
+    h1a = add_indicators(resample_ohlc(df5m, 60))
 
-    signals = []
+    merged = pd.merge_asof(h1a.sort_values("time"), d4[["time", "d4_ema20", "d4_ema50", "d4_rsi", "d4_macd_hist"]],
+                            on="time", direction="backward")
+    merged = pd.merge_asof(merged, d1[["time", "d1_ema20", "d1_ema50"]], on="time", direction="backward")
+    return merged
 
-    for coin in COINS:
 
-        if coin not in markets:
+# ---------------- SIGNAL LOGIC ----------------
+def evaluate_row(row):
+    needed = ["d1_ema20", "d1_ema50", "d4_ema20", "d4_ema50", "d4_rsi", "d4_macd_hist",
+              "ema20", "rsi", "vol_ma", "atr", "close", "open", "volume"]
+    if any(pd.isna(row.get(k)) for k in needed):
+        return None
 
+    daily_up = row["d1_ema20"] > row["d1_ema50"]
+    daily_down = row["d1_ema20"] < row["d1_ema50"]
+    h4_up = row["d4_ema20"] > row["d4_ema50"]
+    h4_down = row["d4_ema20"] < row["d4_ema50"]
+
+    long_ok = daily_up and h4_up
+    short_ok = daily_down and h4_down
+    if not (long_ok or short_ok):
+        return None
+
+    score, reasons = 0, []
+    direction = "LONG" if long_ok else "SHORT"
+
+    if direction == "LONG":
+        if row["d4_rsi"] > 50: score += 20; reasons.append("RSI ۴ساعته مثبت")
+        if row["d4_macd_hist"] > 0: score += 20; reasons.append("MACD ۴ساعته مثبت")
+        if row["close"] > row["ema20"]: score += 20; reasons.append("قیمت ۱ساعته بالای EMA20")
+        if row["rsi"] >= 52: score += 15; reasons.append("مومنتوم ۱ساعته صعودی")
+        if pd.notna(row["vol_ma"]) and row["volume"] > row["vol_ma"] * 1.2 and row["close"] > row["open"]:
+            score += 15; reasons.append("حجم بالاتر از میانگین")
+        score += 10; reasons.append("هم‌جهتی روند روزانه + ۴ساعته")
+    else:
+        if row["d4_rsi"] < 50: score += 20; reasons.append("RSI ۴ساعته منفی")
+        if row["d4_macd_hist"] < 0: score += 20; reasons.append("MACD ۴ساعته منفی")
+        if row["close"] < row["ema20"]: score += 20; reasons.append("قیمت ۱ساعته زیر EMA20")
+        if row["rsi"] <= 48: score += 15; reasons.append("مومنتوم ۱ساعته نزولی")
+        if pd.notna(row["vol_ma"]) and row["volume"] > row["vol_ma"] * 1.2 and row["close"] < row["open"]:
+            score += 15; reasons.append("حجم بالاتر از میانگین")
+        score += 10; reasons.append("هم‌جهتی روند روزانه + ۴ساعته")
+
+    if score < SIGNAL_SCORE_MIN:
+        return None
+    return direction, score, reasons
+
+
+def build_trade_levels(entry, av, direction):
+    if direction == "LONG":
+        stop = entry - 1.2 * av
+        risk = entry - stop
+        return stop, entry + 1.5 * risk, entry + 2.5 * risk
+    stop = entry + 1.2 * av
+    risk = stop - entry
+    return stop, entry - 1.5 * risk, entry - 2.5 * risk
+
+
+# ---------------- BACKTEST (روی هر چقدر آرشیو محلی که تا الان جمع شده) ----------------
+def run_backtest(merged):
+    trades = []
+    i, n, busy_until = 0, len(merged), -1
+    rows = merged.to_dict("records")
+
+    while i < n:
+        if i <= busy_until:
+            i += 1
+            continue
+        row = rows[i]
+        res = evaluate_row(row)
+        if res is None:
+            i += 1
             continue
 
-        signal = process_market(
-            markets[coin],
-            history
-        )
+        direction, _, _ = res
+        entry, av = row["close"], row["atr"]
+        if not np.isfinite(av) or av <= 0:
+            i += 1
+            continue
+        stop, tp1, tp2 = build_trade_levels(entry, av, direction)
 
-        if signal is not None:
-            signals.append(signal)
+        outcome = "EXPIRED"
+        j = min(i + BACKTEST_HORIZON_BARS, n - 1)
+        for k in range(i + 1, min(i + 1 + BACKTEST_HORIZON_BARS, n)):
+            hi, lo = rows[k]["high"], rows[k]["low"]
+            if direction == "LONG":
+                if lo <= stop: outcome = "SL"; j = k; break
+                if hi >= tp2: outcome = "TP2"; j = k; break
+                if hi >= tp1: outcome = "TP1"; j = k; break
+            else:
+                if hi >= stop: outcome = "SL"; j = k; break
+                if lo <= tp2: outcome =
 
-    signals.sort(
-        key=lambda item: item["score"],
-        reverse=True
+"TP2"; j = k; break
+                if lo <= tp1: outcome = "TP1"; j = k; break
+
+        trades.append(outcome)
+        busy_until = j
+        i += 1
+
+    wins = sum(1 for o in trades if o in ("TP1", "TP2"))
+    losses = sum(1 for o in trades if o == "SL")
+    resolved = wins + losses
+    return {
+        "total_signals": len(trades),
+        "resolved": resolved,
+        "wins": wins,
+        "losses": losses,
+        "winrate": round(wins / resolved, 3) if resolved else 0.0,
+    }
+
+
+# ---------------- MESSAGING ----------------
+def fmt(x):
+    x = float(x)
+    if x >= 1000: return f"{x:,.2f}"
+    if x >= 1: return f"{x:,.4f}"
+    if x >= 0.01: return f"{x:,.6f}"
+    return f"{x:.10f}"
+
+
+def send_telegram(text):
+    r = SESSION.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      json={"chat_id": CHAT_ID, "text": text}, timeout=20)
+    r.raise_for_status()
+
+
+def make_signal_message(base, direction, entry, stop, tp1, tp2, score, reasons, bt, history_days):
+    reasons_txt = "\n".join("✅ " + x for x in reasons)
+    when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        "📢 سیگنال تحلیل تبدیل (فقط Tabdeal، آرشیو محلی)\n\n"
+        f"🪙 {base}/USDT\n"
+        f"📌 جهت: {'خرید (LONG)' if direction=='LONG' else 'فروش (SHORT)'}\n"
+        "⏱ تایم‌فریم: روزانه + ۴ساعته + ۱ساعته (هم‌جهت)\n\n"
+        f"📍 ورود: {fmt(entry)}\n"
+        f"🛑 حد ضرر: {fmt(stop)}\n"
+        f"🎯 TP1: {fmt(tp1)}\n"
+        f"🎯 TP2: {fmt(tp2)}\n"
+        f"📊 امتیاز سیگنال: {score}/100\n"
+        f"📈 نرخ برد بک‌تست: {bt['winrate']*100:.0f}٪ (از {bt['resolved']} سیگنال گذشته، "
+        f"بر پایه {history_days} روز آرشیو محلی)\n"
+        f"🕐 زمان: {when}\n\n"
+        f"دلایل:\n{reasons_txt}\n\n"
+        "⚠️ این فقط تحلیل است، نه توصیه مالی؛ معامله خودکار انجام نمی‌شود."
     )
 
-    signals = signals[:MAX_SIGNALS]
 
-    if signals:
-
-        for signal in signals:
-
-            message = create_signal_message(
-                signal
-            )
-
-            send_telegram(message)
-
-            print(
-                "سیگنال ارسال شد:",
-                signal["base"]
-            )
-
-    else:
-
-        print(
-            "در این اجرا سیگنال معتبر پیدا نشد."
-        )
-
-    save_history(history)
-
-    status = create_status_message(
-        history
-    )
-
-    send_telegram(status)
-
-    print("=" * 50)
-    print("اجرای ربات تمام شد.")
-    print("=" * 50)
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
 
 
-if __name__ == "__main__":
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def evaluate_open_signals(history, markets):
+    changed = False
+    now = datetime.now(timezone.utc)
+    for x in history:
+        if x.get("status") != "OPEN":
+            continue
+        info = markets.get((x["base"], "USDT"))
+        if not info:
+            continue
+        price = get_last_price(info["symbol"], info["tabdeal_symbol"])
+        if price is None:
+            continue
+
+        direction = x["direction"]
+        outcome = None
+        if direction == "LONG":
+            if price <= x["stop"]: outcome = "SL"
+            elif price >= x["tp2"]: outcome = "TP2"
+            elif price >= x["tp1"]: outcome = "TP1"
+        else:
+            if price >= x["stop"]: outcome = "SL"
+            elif price <= x["tp2"]: outcome = "TP2"
+            elif price <= x["tp1"]: outcome = "TP1"
+
+        signal_time = datetime.fromisoformat(x["signal_time"])
+        if outcome is None and (now - signal_time) > timedelta(hours=SIGNAL_TTL_HOURS):
+            outcome = "EXPIRED"
+
+        if outcome:
+            x["status"] = outcome
+            x["hit_price"] = price
+            x["closed_time"] = now.isoformat()
+            changed = True
+            try:
+                label = {"TP1": "✅ درست — TP1", "TP2": "✅ درست — TP2",
+                          "SL": "❌ نادرست — حد ضرر", "EXPIRED": "⚪ نامشخص — منقضی شد"}[outcome]
+                send_telegram(f"📊 نتیجه سیگنال\n\n🪙 {x['base']}/USDT\n{label}\n"
+                               f"💵 ورود: {fmt(x['entry'])}\n🎯 قیمت نتیجه: {fmt(price)}")
+            except Exception:
+                pass
+    return changed
+
+
+# ---------------- MAIN ----------------
+def main():
+    markets = get_tabdeal_markets()
+    store = load_store()
+    sig_history = load_json(SIGNALS_HISTORY_FILE, [])
+
+    if evaluate_open_signals(sig_history, markets):
+        save_json(SIGNALS_HISTORY_FILE, sig_history[-SIGNALS_HISTORY_MAX:])
+
+    open_bases = {x["base"] for
+
+x in sig_history if x.get("status") == "OPEN"}
+    store_changed = False
+
+    for base in TOP5:
+        try:
+            info = markets.get((base, QUOTE))
+            if not info:
+                print(f"{base}/{QUOTE} در بازارهای Tabdeal پیدا نشد، رد شد.")
+                continue
+
+            trades = get_trades(info["symbol"], info["tabdeal_symbol"])
+            new_candles = trades_to_candles(trades, BASE_CANDLE_MINUTES)
+            store[base] = merge_into_store(store.get(base), new_candles)
+            store_changed = True
+
+            df5m = store[base]
+            if df5m.empty:
+                continue
+            history_days = (df5m["time"].max() - df5m["time"].min()).total_seconds() / 86400
+
+            if history_days < MIN_HISTORY_DAYS:
+                print(f"{base}: هنوز {history_days:.1f} روز آرشیو جمع شده "
+                      f"(نیاز به {MIN_HISTORY_DAYS} روز) — فقط داده جمع می‌شود.")
+                continue
+
+            if base in open_bases:
+                continue  # یک پوزیشن باز به ازای هر ارز کافیست
+
+            merged = align_timeframes(df5m)
+            if len(merged) < 60:
+                continue
+
+            bt = run_backtest(merged)
+            if bt["resolved"] < BACKTEST_MIN_TRADES or bt["winrate"] < BACKTEST_MIN_WINRATE:
+                print(f"{base}: بک‌تست رد شد (winrate={bt['winrate']}, resolved={bt['resolved']}).")
+                continue
+
+            last_row = merged.iloc[-2]  # آخرین کندل کامل‌شده
+            res = evaluate_row(last_row)
+            if res is None:
+                continue
+
+            direction, score, reasons = res
+            live_price = get_last_price(info["symbol"], info["tabdeal_symbol"])
+            entry = live_price if live_price is not None else float(last_row["close"])
+            av = float(last_row["atr"])
+            stop, tp1, tp2 = build_trade_levels(entry, av, direction)
+
+            msg = make_signal_message(base, direction, entry, stop, tp1, tp2, score, reasons, bt,
+                                       round(history_days))
+            send_telegram(msg)
+
+            sig_history.append({
+                "base": base, "symbol": info["symbol"], "direction": direction,
+                "entry": entry, "stop": stop, "tp1": tp1, "tp2": tp2,
+                "signal_time": datetime.now(timezone.utc).isoformat(), "status": "OPEN",
+            })
+            save_json(SIGNALS_HISTORY_FILE, sig_history[-SIGNALS_HISTORY_MAX:])
+
+        except requests.HTTPError as e:
+            print(f"{base}: خطای HTTP - {e}")
+        except Exception as e:
+            print(f"{base}: خطای غیرمنتظره - {e}")
+
+    if store_changed:
+        save_store(store)
+
+
+if name == "__main__":
     main()
