@@ -1,1 +1,67 @@
-[]
+[
+  {
+    "symbol": "QNTUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 66.89,
+    "stop": 66.38223408477175,
+    "tp1": 67.65164887284237,
+    "tp2": 68.15941478807062,
+    "signal_time_ms": 1790058129337,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T06:54:46.831785+00:00"
+  },
+  {
+    "symbol": "FTTUSDT",
+    "direction": "SHORT",
+    "score": 100,
+    "entry": 0.252,
+    "stop": 0.25611257128510845,
+    "tp1": 0.24583114307233733,
+    "tp2": 0.2417185717872289,
+    "signal_time_ms": 1790058965686,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T06:54:48.192483+00:00"
+  },
+  {
+    "symbol": "TWTUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.5833,
+    "stop": 0.5746023067165705,
+    "tp1": 0.5963465399251443,
+    "tp2": 0.6050442332085738,
+    "signal_time_ms": 1790054451045,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T06:54:49.386458+00:00"
+  },
+  {
+    "symbol": "ETHWUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.2892,
+    "stop": 0.2828688387081492,
+    "tp1": 0.2986967419377762,
+    "tp2": 0.30502790322962703,
+    "signal_time_ms": 1790054546928,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T06:54:50.569881+00:00"
+  },
+  {
+    "symbol": "USUALUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.01409,
+    "stop": 0.01370107034259745,
+    "tp1": 0.014673394486103827,
+    "tp2": 0.015062324143506375,
+    "signal_time_ms": 1790052701835,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T06:54:51.794012+00:00"
+  }
+]
