@@ -957,4 +957,4 @@ def make_signal_message(
         f"امتیاز: {score}/100\n\n"
         f"ورود: {fmt_price(entry)}\n"
         f"حد ضرر: {fmt_price(stop)}\n"
-        f"حد سود ۱
+        f"حد سود ۱: {fmt_price(tp1)}\n"
