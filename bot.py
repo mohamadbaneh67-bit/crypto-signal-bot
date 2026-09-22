@@ -266,7 +266,7 @@ if float(a5.close) < recent_low:
         "base": market["base"],
         "quote": market["quote"],
         "direction": direction,
-        "score": int(score),
+        "score": min(100, int(score)),
         "entry": entry,
         "stop": stop,
         "tp1": tp1,
