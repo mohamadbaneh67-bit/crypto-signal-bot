@@ -1,20 +1,12 @@
 """
-ربات تحلیل سیگنال Tabdeal - نسخه اصلاح‌شده
-------------------------------------------
-ویژگی‌ها:
-- فقط داده عمومی خود Tabdeal؛ بدون Binance
-- دریافت معاملات اخیر Tabdeal و ساخت کندل 5 دقیقه‌ای
-- تحلیل 5 دقیقه و 15 دقیقه
-- ذخیره آرشیو محلی برای ساخته‌شدن سابقه در اجرای مداوم
-- بک‌تست داخلی برای سنجش نرخ برد سیگنال‌ها
-- ارسال سیگنال خرید/فروش به Telegram
-- پیگیری نتیجه سیگنال‌های باز
-- بدون انجام معامله خودکار
-
-نکته مهم برای GitHub Actions:
-فایل‌های candle_store.json و signals_history.json باید بین اجرای Jobها
-حفظ شوند (مثلاً با commit خودکار در workflow). در غیر این صورت هر اجرای
-GitHub Actions از صفر شروع می‌کند و سابقه ساخته نمی‌شود.
+ربات تحلیل سیگنال Tabdeal
+- فقط داده عمومی Tabdeal
+- ساخت کندل 5 دقیقه‌ای از معاملات اخیر
+- تحلیل 5 و 15 دقیقه
+- ذخیره سابقه کندل و سیگنال
+- بک‌تست داخلی
+- ارسال سیگنال به Telegram
+- بدون معامله خودکار
 """
 
 import json
@@ -25,10 +17,6 @@ import numpy as np
 import pandas as pd
 import requests
 
-
-# =========================
-# CONFIG
-# =========================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -42,41 +30,21 @@ TABDEAL_BASE = "https://api1.tabdeal.org/r/api/v1"
 REQUEST_TIMEOUT = 20
 SESSION = requests.Session()
 
-# ارزهایی که فعلاً بررسی می‌شوند
 TOP5 = ["BTC", "ETH", "BNB", "SOL", "XRP"]
 QUOTE = "USDT"
-
-# داده خام
 TRADE_LIMIT = 1000
 BASE_CANDLE_MINUTES = 5
 
-# آرشیو
 CANDLE_STORE_FILE = "candle_store.json"
 SIGNALS_HISTORY_FILE = "signals_history.json"
 STORE_MAX_DAYS = 60
 
-# حداقل سابقه لازم برای شروع تحلیل
-# برای اندیکاتورهای 15 دقیقه‌ای چند روز کافی است.
-MIN_HISTORY_DAYS = 3
-
-# بک‌تست
-BACKTEST_HORIZON_BARS = 48       # 48 کندل 15 دقیقه‌ای = 12 ساعت
+BACKTEST_HORIZON_BARS = 48
 BACKTEST_MIN_TRADES = 10
-BACKTEST_MIN_WINRATE = 0.55
-
-# حداقل امتیاز سیگنال
 SIGNAL_SCORE_MIN = 65
-
-# هر سیگنال حداکثر چند ساعت باز بماند
 SIGNAL_TTL_HOURS = 24
-
-# حداکثر تعداد سیگنال ذخیره‌شده
 SIGNALS_HISTORY_MAX = 500
 
-
-# =========================
-# HELPERS
-# =========================
 
 def utc_now():
     return datetime.now(timezone.utc)
@@ -102,22 +70,14 @@ def get_value(obj, *keys):
 
 def trade_time_ms(trade):
     value = get_value(
-        trade,
-        "time",
-        "timestamp",
-        "T",
-        "createdAt",
-        "created_at",
-        "timeMs",
+        trade, "time", "timestamp", "T",
+        "createdAt", "created_at", "timeMs"
     )
     value = as_float(value)
     if value is None:
         return None
-
-    # اگر timestamp بر حسب ثانیه بود، به میلی‌ثانیه تبدیل کن.
     if value < 10_000_000_000:
         value *= 1000
-
     return int(value)
 
 
@@ -132,39 +92,35 @@ def fmt_price(value):
     return f"{value:.10f}"
 
 
-# =========================
-# TABDEAL API
-# =========================
+def empty_candles():
+    return pd.DataFrame(
+        columns=["time", "open", "high", "low", "close", "volume"]
+    )
+
 
 def tabdeal_get(endpoint, params=None):
     url = f"{TABDEAL_BASE}/{endpoint.lstrip('/')}"
     response = SESSION.get(
-        url,
-        params=params or {},
-        timeout=REQUEST_TIMEOUT,
+        url, params=params or {}, timeout=REQUEST_TIMEOUT
     )
     response.raise_for_status()
     return response.json()
 
 
 def unwrap_data(data):
-    """پاسخ‌های مختلف API را به لیست تبدیل می‌کند."""
     if isinstance(data, list):
         return data
-
     if isinstance(data, dict):
         for key in ("data", "result", "symbols", "trades"):
             value = data.get(key)
             if isinstance(value, list):
                 return value
-
     return []
 
 
 def get_tabdeal_markets():
     data = tabdeal_get("exchangeInfo")
     markets = unwrap_data(data)
-
     result = {}
 
     for market in markets:
@@ -192,11 +148,6 @@ def get_tabdeal_markets():
 
 
 def get_trades(symbol, tabdeal_symbol=None):
-    """
-    معاملات اخیر عمومی Tabdeal.
-    طبق API عمومی، داده‌ها recent trades هستند و آرشیو تاریخی
-    از خود API دریافت نمی‌شود؛ بنابراین آرشیو باید با اجرای منظم ساخته شود.
-    """
     candidates = []
 
     for value in (symbol, tabdeal_symbol):
@@ -211,54 +162,19 @@ def get_trades(symbol, tabdeal_symbol=None):
         try:
             data = tabdeal_get(
                 "trades",
-                {
-                    "symbol": candidate,
-                    "limit": TRADE_LIMIT,
-                },
+                {"symbol": candidate, "limit": TRADE_LIMIT},
             )
             trades = unwrap_data(data)
-
             if isinstance(trades, list):
                 return trades
-
         except requests.RequestException as exc:
             last_error = exc
-            continue
 
     if last_error:
         raise last_error
 
     return []
 
-
-def get_last_price(symbol, tabdeal_symbol=None):
-    try:
-        trades = get_trades(symbol, tabdeal_symbol)
-    except requests.RequestException:
-        return None
-
-    values = []
-
-    for trade in trades:
-        if not isinstance(trade, dict):
-            continue
-
-        ts = trade_time_ms(trade)
-        price = as_float(get_value(trade, "price", "p"))
-
-        if ts is not None and price is not None and price > 0:
-            values.append((ts, price))
-
-    if not values:
-        return None
-
-    values.sort(key=lambda x: x[0])
-    return values[-1][1]
-
-
-# =========================
-# TRADE -> 5M CANDLES
-# =========================
 
 def trades_to_candles(trades, minutes=5):
     rows = []
@@ -270,12 +186,8 @@ def trades_to_candles(trades, minutes=5):
         price = as_float(get_value(trade, "price", "p"))
         quantity = as_float(
             get_value(
-                trade,
-                "qty",
-                "quantity",
-                "q",
-                "amount",
-                "volume",
+                trade, "qty", "quantity", "q",
+                "amount", "volume"
             )
         )
         timestamp = trade_time_ms(trade)
@@ -295,38 +207,40 @@ def trades_to_candles(trades, minutes=5):
             continue
 
     if not rows:
-        return pd.DataFrame(
-            columns=["time", "open", "high", "low", "close", "volume"]
-        )
+        return empty_candles()
 
     df = pd.DataFrame(
-        rows,
-        columns=["time", "price", "volume"],
+        rows, columns=["time", "price", "volume"]
     )
 
     df = (
         df.sort_values("time")
-        .drop_duplicates(subset=["time", "price", "volume"])
+        .drop_duplicates(
+            subset=["time", "price", "volume"]
+        )
         .set_index("time")
     )
 
-    candles = df["price"].resample(f"{minutes}min").ohlc()
-    candles["volume"] = df["volume"].resample(f"{minutes}min").sum()
+    candles = df["price"].resample(
+        f"{minutes}min"
+    ).ohlc()
 
-    candles = candles.dropna(
-        subset=["open", "high", "low", "close"]
+    candles["volume"] = df["volume"].resample(
+        f"{minutes}min"
+    ).sum()
+
+    return (
+        candles.dropna(
+            subset=["open", "high", "low", "close"]
+        ).reset_index()
     )
 
-    return candles.reset_index()
-
-
-# =========================
-# LOCAL STORAGE
-# =========================
 
 def load_store():
     try:
-        with open(CANDLE_STORE_FILE, "r", encoding="utf-8") as file:
+        with open(
+            CANDLE_STORE_FILE, "r", encoding="utf-8"
+        ) as file:
             raw = json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -338,33 +252,43 @@ def load_store():
 
     for base, rows in raw.items():
         if not isinstance(rows, list) or not rows:
-            store[base] = empty_candles()
+            store[str(base).upper()] = empty_candles()
             continue
 
         try:
             df = pd.DataFrame(rows)
+            required = {
+                "time", "open", "high",
+                "low", "close", "volume"
+            }
 
-            required = {"time", "open", "high", "low", "close", "volume"}
             if not required.issubset(df.columns):
-                store[base] = empty_candles()
+                store[str(base).upper()] = empty_candles()
                 continue
 
             df["time"] = pd.to_datetime(
-                df["time"],
-                utc=True,
-                errors="coerce",
+                df["time"], utc=True, errors="coerce"
             )
 
-            for column in ["open", "high", "low", "close", "volume"]:
+            for column in [
+                "open", "high", "low",
+                "close", "volume"
+            ]:
                 df[column] = pd.to_numeric(
-                    df[column],
-                    errors="coerce",
+                    df[column], errors="coerce"
                 )
 
             df = (
-                df.dropna(subset=["time", "open", "high", "low", "close"])
+                df.dropna(
+                    subset=[
+                        "time", "open", "high",
+                        "low", "close"
+                    ]
+                )
                 .sort_values("time")
-                .drop_duplicates(subset="time", keep="last")
+                .drop_duplicates(
+                    subset="time", keep="last"
+                )
                 .reset_index(drop=True)
             )
 
@@ -390,16 +314,45 @@ def save_store(store):
 
     temp_file = f"{CANDLE_STORE_FILE}.tmp"
 
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(raw, file, ensure_ascii=False)
+    with open(
+        temp_file, "w", encoding="utf-8"
+    ) as file:
+        json.dump(
+            raw, file, ensure_ascii=False
+        )
 
     os.replace(temp_file, CANDLE_STORE_FILE)
 
 
-def empty_candles():
-    return pd.DataFrame(
-        columns=["time", "open", "high", "low", "close", "volume"]
-    )
+def load_signal_history():
+    try:
+        with open(
+            SIGNALS_HISTORY_FILE,
+            "r",
+            encoding="utf-8",
+        ) as file:
+            data = json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    return data if isinstance(data, list) else []
+
+
+def save_signal_history(history):
+    history = history[-SIGNALS_HISTORY_MAX:]
+    temp_file = f"{SIGNALS_HISTORY_FILE}.tmp"
+
+    with open(
+        temp_file, "w", encoding="utf-8"
+    ) as file:
+        json.dump(
+            history,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    os.replace(temp_file, SIGNALS_HISTORY_FILE)
 
 
 def merge_into_store(existing, new_candles):
@@ -422,30 +375,36 @@ def merge_into_store(existing, new_candles):
         errors="coerce",
     )
 
-    for column in ["open", "high", "low", "close", "volume"]:
+    for column in [
+        "open", "high", "low",
+        "close", "volume"
+    ]:
         merged[column] = pd.to_numeric(
-            merged[column],
-            errors="coerce",
+            merged[column], errors="coerce"
         )
 
     merged = (
-        merged.dropna(subset=["time", "open", "high", "low", "close"])
-        .drop_duplicates(subset="time", keep="last")
+        merged.dropna(
+            subset=[
+                "time", "open", "high",
+                "low", "close"
+            ]
+        )
+        .drop_duplicates(
+            subset="time", keep="last"
+        )
         .sort_values("time")
     )
 
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(
-        days=STORE_MAX_DAYS
+    cutoff = (
+        pd.Timestamp.now(tz="UTC")
+        - pd.Timedelta(days=STORE_MAX_DAYS)
     )
 
     return merged[
         merged["time"] >= cutoff
     ].reset_index(drop=True)
 
-
-# =========================
-# INDICATORS
-# =========================
 
 def ema(series, period):
     return series.ewm(
@@ -457,7 +416,6 @@ def ema(series, period):
 
 def rsi(series, period=14):
     delta = series.diff()
-
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
 
@@ -473,7 +431,9 @@ def rsi(series, period=14):
         min_periods=period,
     ).mean()
 
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rs = avg_gain / avg_loss.replace(
+        0, np.nan
+    )
 
     return 100 - (100 / (1 + rs))
 
@@ -500,9 +460,15 @@ def atr(df, period=14):
 def add_indicators(df):
     result = df.copy()
 
-    result["ema20"] = ema(result["close"], 20)
-    result["ema50"] = ema(result["close"], 50)
-    result["rsi"] = rsi(result["close"])
+    result["ema20"] = ema(
+        result["close"], 20
+    )
+    result["ema50"] = ema(
+        result["close"], 50
+    )
+    result["rsi"] = rsi(
+        result["close"]
+    )
     result["atr"] = atr(result)
 
     macd_line = (
@@ -510,8 +476,13 @@ def add_indicators(df):
         - ema(result["close"], 26)
     )
 
-    macd_signal = ema(macd_line, 9)
-    result["macd_hist"] = macd_line - macd_signal
+    macd_signal = ema(
+        macd_line, 9
+    )
+
+    result["macd_hist"] = (
+        macd_line - macd_signal
+    )
 
     result["vol_ma"] = (
         result["volume"]
@@ -527,13 +498,16 @@ def resample_ohlc(df5m, minutes):
         return empty_candles()
 
     df = df5m.copy()
+
     df["time"] = pd.to_datetime(
         df["time"],
         utc=True,
         errors="coerce",
     )
 
-    df = df.dropna(subset=["time"]).sort_values("time")
+    df = df.dropna(
+        subset=["time"]
+    ).sort_values("time")
 
     data = df.set_index("time")
 
@@ -541,24 +515,23 @@ def resample_ohlc(df5m, minutes):
         f"{minutes}min"
     ).ohlc()
 
-    candles["volume"] = data["volume"].resample(
-        f"{minutes}min"
-    ).sum()
+    candles["volume"] = (
+        data["volume"].resample(
+            f"{minutes}min"
+        ).sum()
+    )
 
     return (
         candles.dropna(
-            subset=["open", "high", "low", "close"]
-        )
-        .reset_index()
+            subset=[
+                "open", "high",
+                "low", "close"
+            ]
+        ).reset_index()
     )
 
 
 def build_timeframes(df5m):
-    """
-    تایم‌فریم‌های مورد استفاده:
-    - 5 دقیقه برای ورود و مومنتوم
-    - 15 دقیقه برای روند
-    """
     m5 = add_indicators(
         resample_ohlc(df5m, 5)
     )
@@ -570,11 +543,13 @@ def build_timeframes(df5m):
     if m5.empty or m15.empty:
         return pd.DataFrame()
 
-    m15 = m15.add_prefix("m15_").rename(
+    m15 = m15.add_prefix(
+        "m15_"
+    ).rename(
         columns={"m15_time": "time"}
     )
 
-    merged = pd.merge_asof(
+    return pd.merge_asof(
         m5.sort_values("time"),
         m15[
             [
@@ -589,12 +564,6 @@ def build_timeframes(df5m):
         direction="backward",
     )
 
-    return merged
-
-
-# =========================
-# SIGNAL LOGIC
-# =========================
 
 def evaluate_row(row):
     required = [
@@ -619,88 +588,133 @@ def evaluate_row(row):
     ):
         return None
 
-    m15_up = row["m15_ema20"] > row["m15_ema50"]
-    m15_down = row["m15_ema20"] < row["m15_ema50"]
+    m15_up = (
+        row["m15_ema20"]
+        > row["m15_ema50"]
+    )
+
+    m15_down = (
+        row["m15_ema20"]
+        < row["m15_ema50"]
+    )
 
     buy_score = 0
     sell_score = 0
     buy_reasons = []
     sell_reasons = []
 
-    # 15 دقیقه
     if m15_up:
         buy_score += 20
-        buy_reasons.append("روند ۱۵ دقیقه‌ای صعودی")
+        buy_reasons.append(
+            "روند ۱۵ دقیقه‌ای صعودی"
+        )
 
     if m15_down:
         sell_score += 20
-        sell_reasons.append("روند ۱۵ دقیقه‌ای نزولی")
+        sell_reasons.append(
+            "روند ۱۵ دقیقه‌ای نزولی"
+        )
 
-    # RSI 15m
     if row["m15_rsi"] > 50:
         buy_score += 15
-        buy_reasons.append("RSI ۱۵ دقیقه‌ای مثبت")
+        buy_reasons.append(
+            "RSI ۱۵ دقیقه‌ای مثبت"
+        )
     elif row["m15_rsi"] < 50:
         sell_score += 15
-        sell_reasons.append("RSI ۱۵ دقیقه‌ای منفی")
+        sell_reasons.append(
+            "RSI ۱۵ دقیقه‌ای منفی"
+        )
 
-    # MACD 15m
     if row["m15_macd_hist"] > 0:
         buy_score += 15
-        buy_reasons.append("MACD ۱۵ دقیقه‌ای مثبت")
+        buy_reasons.append(
+            "MACD ۱۵ دقیقه‌ای مثبت"
+        )
     elif row["m15_macd_hist"] < 0:
         sell_score += 15
-        sell_reasons.append("MACD ۱۵ دقیقه‌ای منفی")
+        sell_reasons.append(
+            "MACD ۱۵ دقیقه‌ای منفی"
+        )
 
-    # 5m
     if row["close"] > row["ema20"]:
         buy_score += 15
-        buy_reasons.append("قیمت ۵ دقیقه‌ای بالای EMA20")
+        buy_reasons.append(
+            "قیمت ۵ دقیقه‌ای بالای EMA20"
+        )
     elif row["close"] < row["ema20"]:
         sell_score += 15
-        sell_reasons.append("قیمت ۵ دقیقه‌ای زیر EMA20")
+        sell_reasons.append(
+            "قیمت ۵ دقیقه‌ای زیر EMA20"
+        )
 
     if row["rsi"] >= 52:
         buy_score += 10
-        buy_reasons.append("مومنتوم ۵ دقیقه‌ای صعودی")
+        buy_reasons.append(
+            "مومنتوم ۵ دقیقه‌ای صعودی"
+        )
     elif row["rsi"] <= 48:
         sell_score += 10
-        sell_reasons.append("مومنتوم ۵ دقیقه‌ای نزولی")
+        sell_reasons.append(
+            "مومنتوم ۵ دقیقه‌ای نزولی"
+        )
 
     if row["macd_hist"] > 0:
         buy_score += 10
-        buy_reasons.append("MACD ۵ دقیقه‌ای مثبت")
+        buy_reasons.append(
+            "MACD ۵ دقیقه‌ای مثبت"
+        )
     elif row["macd_hist"] < 0:
         sell_score += 10
-        sell_reasons.append("MACD ۵ دقیقه‌ای منفی")
+        sell_reasons.append(
+            "MACD ۵ دقیقه‌ای منفی"
+        )
 
-    # حجم
     if (
         pd.notna(row["vol_ma"])
         and row["vol_ma"] > 0
-        and row["volume"] > row["vol_ma"] * 1.2
+        and row["volume"]
+        > row["vol_ma"] * 1.2
     ):
         if row["close"] > row["open"]:
             buy_score += 15
-            buy_reasons.append("افزایش حجم همراه با کندل صعودی")
+            buy_reasons.append(
+                "افزایش حجم همراه با کندل صعودی"
+            )
         elif row["close"] < row["open"]:
             sell_score += 15
-            sell_reasons.append("افزایش حجم همراه با کندل نزولی")
+            sell_reasons.append(
+                "افزایش حجم همراه با کندل نزولی"
+            )
 
-    if buy_score >= SIGNAL_SCORE_MIN and buy_score > sell_score:
-        return "BUY", buy_score, buy_reasons
+    if (
+        buy_score >= SIGNAL_SCORE_MIN
+        and buy_score > sell_score
+    ):
+        return (
+            "BUY",
+            buy_score,
+            buy_reasons,
+        )
 
-    if sell_score >= SIGNAL_SCORE_MIN and sell_score > buy_score:
-        return "SELL", sell_score, sell_reasons
+    if (
+        sell_score >= SIGNAL_SCORE_MIN
+        and sell_score > buy_score
+    ):
+        return (
+            "SELL",
+            sell_score,
+            sell_reasons,
+        )
 
     return None
 
 
-# =========================
-# LEVELS
-# =========================
-
-def build_trade_levels(entry, atr_value, direction):
+def build_trade_levels(
+    entry,
+    atr_value,
+    direction,
+):
     entry = float(entry)
     atr_value = float(atr_value)
 
@@ -710,20 +724,18 @@ def build_trade_levels(entry, atr_value, direction):
     risk = 1.2 * atr_value
 
     if direction == "BUY":
-        stop = entry - risk
-        tp1 = entry + 1.5 * risk
-        tp2 = entry + 2.5 * risk
-    else:
-        stop = entry + risk
-        tp1 = entry - 1.5 * risk
-        tp2 = entry - 2.5 * risk
+        return (
+            entry - risk,
+            entry + 1.5 * risk,
+            entry + 2.5 * risk,
+        )
 
-    return stop, tp1, tp2
+    return (
+        entry + risk,
+        entry - 1.5 * risk,
+        entry - 2.5 * risk,
+    )
 
-
-# =========================
-# BACKTEST
-# =========================
 
 def run_backtest(merged):
     if merged is None or len(merged) < 100:
@@ -735,9 +747,11 @@ def run_backtest(merged):
             "winrate": 0.0,
         }
 
-    rows = merged.to_dict("records")
-    trades = []
+    rows = merged.to_dict(
+        "records"
+    )
 
+    trades = []
     i = 0
     n = len(rows)
     busy_until = -1
@@ -747,18 +761,29 @@ def run_backtest(merged):
             i += 1
             continue
 
-        row = rows[i]
-        signal = evaluate_row(row)
+        signal = evaluate_row(
+            rows[i]
+        )
 
         if signal is None:
             i += 1
             continue
 
         direction, _, _ = signal
-        entry = as_float(row["close"])
-        atr_value = as_float(row["atr"])
 
-        if entry is None or atr_value is None or atr_value <= 0:
+        entry = as_float(
+            rows[i]["close"]
+        )
+
+        atr_value = as_float(
+            rows[i]["atr"]
+        )
+
+        if (
+            entry is None
+            or atr_value is None
+            or atr_value <= 0
+        ):
             i += 1
             continue
 
@@ -775,26 +800,39 @@ def run_backtest(merged):
         stop, tp1, tp2 = levels
 
         outcome = "EXPIRED"
+
         end = min(
             i + BACKTEST_HORIZON_BARS,
             n - 1,
         )
 
-        for k in range(i + 1, end + 1):
-            high = as_float(rows[k]["high"])
-            low = as_float(rows[k]["low"])
+        for k in range(
+            i + 1,
+            end + 1
+        ):
+            high = as_float(
+                rows[k]["high"]
+            )
 
-            if high is None or low is None:
+            low = as_float(
+                rows[k]["low"]
+            )
+
+            if (
+                high is None
+                or low is None
+            ):
                 continue
 
             if direction == "BUY":
-                # در صورت برخورد همزمان، SL را محافظه‌کارانه در نظر می‌گیریم.
                 if low <= stop:
                     outcome = "SL"
                     break
+
                 if high >= tp2:
                     outcome = "TP2"
                     break
+
                 if high >= tp1:
                     outcome = "TP1"
                     break
@@ -803,9 +841,11 @@ def run_backtest(merged):
                 if high >= stop:
                     outcome = "SL"
                     break
+
                 if low <= tp2:
                     outcome = "TP2"
                     break
+
                 if low <= tp1:
                     outcome = "TP1"
                     break
@@ -815,12 +855,14 @@ def run_backtest(merged):
         i += 1
 
     wins = sum(
-        1 for item in trades
+        1
+        for item in trades
         if item in ("TP1", "TP2")
     )
 
     losses = sum(
-        1 for item in trades
+        1
+        for item in trades
         if item == "SL"
     )
 
@@ -832,16 +874,15 @@ def run_backtest(merged):
         "wins": wins,
         "losses": losses,
         "winrate": (
-            round(wins / resolved, 3)
+            round(
+                wins / resolved,
+                3,
+            )
             if resolved
             else 0.0
         ),
     }
 
-
-# =========================
-# TELEGRAM
-# =========================
 
 def send_telegram(message):
     url = (
@@ -882,4 +923,38 @@ def make_signal_message(
     reasons_text = "\n".join(
         f"✅ {reason}"
         for reason in reasons
-   
+    )
+
+    total = backtest.get(
+        "total_signals", 0
+    )
+
+    resolved = backtest.get(
+        "resolved", 0
+    )
+
+    winrate = (
+        backtest.get(
+            "winrate", 0.0
+        ) * 100
+    )
+
+    if resolved >= BACKTEST_MIN_TRADES:
+        bt_status = (
+            f"بک‌تست: {resolved} معامله تعیین‌تکلیف‌شده، "
+            f"نرخ برد {winrate:.1f}%"
+        )
+    else:
+        bt_status = (
+            f"بک‌تست: سابقه کافی نیست "
+            f"({resolved} معامله تعیین‌تکلیف‌شده)"
+        )
+
+    return (
+        f"📊 سیگنال Tabdeal\n\n"
+        f"ارز: {base}/{QUOTE}\n"
+        f"نوع: {direction_text}\n"
+        f"امتیاز: {score}/100\n\n"
+        f"ورود: {fmt_price(entry)}\n"
+        f"حد ضرر: {fmt_price(stop)}\n"
+        f"حد سود ۱
