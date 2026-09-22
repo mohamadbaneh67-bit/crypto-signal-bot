@@ -1182,10 +1182,8 @@ def evaluate_open_signals(
                 "closed_time_ms"
             ] = hit_time
 
-            if status in (
-                "TP1",
-                "TP2",
-            ):
-
-                signal["result"] = (
+           if status in ("TP1", "TP2"):
+    signal["result"] = "درست"
+else:
+    signal["result"] = "نادرست" 
          
