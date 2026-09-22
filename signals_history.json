@@ -63,5 +63,44 @@
     "status": "OPEN",
     "result": null,
     "created_at": "2026-09-22T06:54:51.794012+00:00"
+  },
+  {
+    "symbol": "XRPIRT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 351763.0,
+    "stop": 350378.5277968539,
+    "tp1": 353839.7083047191,
+    "tp2": 355224.1805078652,
+    "signal_time_ms": 1790060083272,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:14:12.605924+00:00"
+  },
+  {
+    "symbol": "RSRUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.001657,
+    "stop": 0.0016466810751384349,
+    "tp1": 0.0016724783872923477,
+    "tp2": 0.0016827973121539132,
+    "signal_time_ms": 1790059290134,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:14:13.785589+00:00"
+  },
+  {
+    "symbol": "PONKEUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.0258,
+    "stop": 0.025293683080961638,
+    "tp1": 0.026559475378557545,
+    "tp2": 0.027065792297595904,
+    "signal_time_ms": 1790059394834,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T07:14:15.200270+00:00"
   }
 ]
