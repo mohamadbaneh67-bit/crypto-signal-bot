@@ -163,9 +163,12 @@
     "tp1": 640218497.3662052,
     "tp2": 642375413.610342,
     "signal_time_ms": 1790066966376,
-    "status": "OPEN",
-    "result": null,
-    "created_at": "2026-09-22T09:08:50.775057+00:00"
+    "status": "SL",
+    "result": "نادرست",
+    "created_at": "2026-09-22T09:08:50.775057+00:00",
+    "hit_price": 633800000.0,
+    "closed_time": "2026-09-22T09:04:03.151000+00:00",
+    "duration_minutes": 14.61
   },
   {
     "symbol": "ENJUSDT",
@@ -189,8 +192,50 @@
     "tp1": 0.2668551091186251,
     "tp2": 0.27009184853104173,
     "signal_time_ms": 1790067218628,
+    "status": "SL",
+    "result": "نادرست",
+    "created_at": "2026-09-22T09:08:53.125091+00:00",
+    "hit_price": 0.2576,
+    "closed_time": "2026-09-22T08:55:31.898000+00:00",
+    "duration_minutes": 1.89
+  },
+  {
+    "symbol": "SSVUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 3.3412,
+    "stop": 3.2793855508564627,
+    "tp1": 3.4339216737153064,
+    "tp2": 3.495736122858844,
+    "signal_time_ms": 1790067270088,
     "status": "OPEN",
     "result": null,
-    "created_at": "2026-09-22T09:08:53.125091+00:00"
+    "created_at": "2026-09-22T09:43:46.998058+00:00"
+  },
+  {
+    "symbol": "LAYERUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.0751,
+    "stop": 0.07402717566379646,
+    "tp1": 0.0767092365043053,
+    "tp2": 0.07778206084050884,
+    "signal_time_ms": 1790002475909,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T09:43:48.234025+00:00"
+  },
+  {
+    "symbol": "SHELLUSDT",
+    "direction": "LONG",
+    "score": 100,
+    "entry": 0.02608,
+    "stop": 0.02567945759719483,
+    "tp1": 0.02668081360420775,
+    "tp2": 0.02708135600701292,
+    "signal_time_ms": 1790024620079,
+    "status": "OPEN",
+    "result": null,
+    "created_at": "2026-09-22T09:43:49.459809+00:00"
   }
 ]
