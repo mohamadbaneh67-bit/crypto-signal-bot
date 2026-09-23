@@ -963,4 +963,645 @@ def create_signal(analysis):
         )
 
     else:
- 
+         return None
+
+    pattern_id = create_pattern_fingerprint(
+        analysis
+    )
+
+    history_score = historical_pattern_score(
+        pattern_id
+    )
+
+    return {
+        "id": hashlib.sha256(
+            (
+                analysis["symbol"]
+                + direction
+                + str(time.time())
+            ).encode()
+        ).hexdigest()[:16],
+
+        "created_at": now_iso(),
+        "created_timestamp": time.time(),
+
+        "symbol": analysis["symbol"],
+        "direction": direction,
+
+        "score": analysis["score"],
+
+        "entry": price,
+        "tp1": tp1,
+        "tp2": tp2,
+        "stop_loss": stop_loss,
+
+        "pattern_id": pattern_id,
+
+        "historical_pattern_score":
+            history_score,
+
+        "status": "OPEN",
+
+        "result": None,
+        "closed_at": None,
+
+        "analysis": {
+            "5m": analysis["5m"],
+            "15m": analysis["15m"],
+        },
+    }
+
+
+# ============================================================
+# Signal Message
+# ============================================================
+
+def signal_to_message(signal):
+
+    direction_text = (
+        "🟢 خرید / LONG"
+        if signal["direction"] == "BUY"
+        else
+        "🔴 فروش / SHORT"
+    )
+
+    historical = signal.get(
+        "historical_pattern_score"
+    )
+
+    if historical is None:
+        historical_text = (
+            "📚 سابقه این الگو: "
+            "هنوز داده کافی ندارد"
+        )
+    else:
+        historical_text = (
+            f"📚 سابقه همین الگو: "
+            f"{historical}%"
+        )
+
+    return (
+        "🚨 سیگنال تحلیلی Tabdeal\n\n"
+        f"🪙 نماد: {signal['symbol']}\n"
+        f"📊 جهت: {direction_text}\n"
+        f"🎯 امتیاز تحلیل: {signal['score']}%\n\n"
+        f"💰 ورود فرضی: {signal['entry']:.8f}\n"
+        f"🎯 TP1: {signal['tp1']:.8f}\n"
+        f"🎯 TP2: {signal['tp2']:.8f}\n"
+        f"🛑 SL: {signal['stop_loss']:.8f}\n\n"
+        f"{historical_text}\n\n"
+        "⏱ تحلیل: 5m + 15m\n"
+        "⚠️ این فقط سیگنال تحلیلی است؛ "
+        "هیچ معامله‌ای توسط ربات انجام نمی‌شود."
+    )
+
+
+# ============================================================
+# Result Evaluation
+# ============================================================
+
+def evaluate_signal(signal):
+
+    if signal.get("status") == "CLOSED":
+        return None
+
+    symbol = signal["symbol"]
+
+    created_timestamp = signal.get(
+        "created_timestamp",
+        0
+    )
+
+    direction = signal["direction"]
+
+    entry = safe_float(
+        signal["entry"]
+    )
+
+    tp1 = safe_float(
+        signal["tp1"]
+    )
+
+    tp2 = safe_float(
+        signal["tp2"]
+    )
+
+    sl = safe_float(
+        signal["stop_loss"]
+    )
+
+    if entry <= 0:
+        return None
+
+    # از زمان ایجاد سیگنال به بعد
+    candles = get_klines(
+        symbol,
+        "5m",
+        120
+    )
+
+    if not candles:
+        return None
+
+    for candle in candles:
+
+        candle_time = candle["open_time"] / 1000
+
+        if candle_time <= created_timestamp:
+            continue
+
+        high = candle["high"]
+        low = candle["low"]
+
+        # ----------------------------------------------------
+        # BUY
+        # ----------------------------------------------------
+
+        if direction == "BUY":
+
+            hit_sl = low <= sl
+            hit_tp2 = high >= tp2
+            hit_tp1 = high >= tp1
+
+            # اگر در یک کندل هم SL و هم TP خورده باشد
+            # از OHLC نمی‌توان فهمید کدام اول اتفاق افتاده
+            if hit_sl and hit_tp2:
+                return "ambiguous"
+
+            if hit_sl and hit_tp1:
+                return "ambiguous"
+
+            if hit_tp2:
+                return "tp2"
+
+            if hit_tp1:
+                return "tp1"
+
+            if hit_sl:
+                return "sl"
+
+        # ----------------------------------------------------
+        # SELL
+        # ----------------------------------------------------
+
+        elif direction == "SELL":
+
+            hit_sl = high >= sl
+            hit_tp2 = low <= tp2
+            hit_tp1 = low <= tp1
+
+            if hit_sl and hit_tp2:
+                return "ambiguous"
+
+            if hit_sl and hit_tp1:
+                return "ambiguous"
+
+            if hit_tp2:
+                return "tp2"
+
+            if hit_tp1:
+                return "tp1"
+
+            if hit_sl:
+                return "sl"
+
+    return None
+
+
+def update_signal_status(signal, result):
+
+    if result == "tp1":
+        signal["status"] = "TP1"
+        signal["result"] = "tp1"
+
+    elif result == "tp2":
+        signal["status"] = "CLOSED"
+        signal["result"] = "tp2"
+        signal["closed_at"] = now_iso()
+
+    elif result == "sl":
+        signal["status"] = "CLOSED"
+        signal["result"] = "sl"
+        signal["closed_at"] = now_iso()
+
+    elif result == "ambiguous":
+        signal["status"] = "CLOSED"
+        signal["result"] = "ambiguous"
+        signal["closed_at"] = now_iso()
+
+    else:
+        return False
+
+    return True
+
+
+# ============================================================
+# Statistics
+# ============================================================
+
+def statistics():
+
+    signals = load_signals()
+
+    total = 0
+    tp1 = 0
+    tp2 = 0
+    sl = 0
+    ambiguous = 0
+    open_count = 0
+
+    for signal in signals
+    
+        result = signal.get("result")
+
+        if result:
+            total += 1
+
+        if result == "tp1":
+            tp1 += 1
+
+        elif result == "tp2":
+            tp2 += 1
+
+        elif result == "sl":
+            sl += 1
+
+        elif result == "ambiguous":
+            ambiguous += 1
+
+        if signal.get("status") in [
+            "OPEN",
+            "TP1",
+        ]:
+            open_count += 1
+
+    completed = (
+        tp1
+        + tp2
+        + sl
+        + ambiguous
+    )
+
+    success = tp1 + tp2
+
+    accuracy = None
+
+    if completed > 0:
+        accuracy = round(
+            success / completed * 100,
+            2
+        )
+
+    return {
+        "total_completed": completed,
+        "tp1": tp1,
+        "tp2": tp2,
+        "sl": sl,
+        "ambiguous": ambiguous,
+        "open": open_count,
+        "accuracy": accuracy,
+    }
+
+
+# ============================================================
+# Main Scanner
+# ============================================================
+
+def scan_market():
+
+    print("\n")
+    print("=" * 60)
+    print("TABDEAL PROFESSIONAL MARKET SCANNER")
+    print("=" * 60)
+
+    symbols = get_symbols()
+
+    if not symbols:
+        print("NO SYMBOLS FOUND")
+        return
+
+    print(
+        f"\n🔎 {len(symbols)} symbols will be analyzed."
+    )
+
+    signals = load_signals()
+
+    new_signals = []
+
+    # --------------------------------------------------------
+    # ابتدا نتایج سیگنال‌های قبلی
+    # --------------------------------------------------------
+
+    print("\n=== بررسی نتایج سیگنال‌های قبلی ===")
+    for signal in signals:
+
+        if signal.get("status") not in [
+            "OPEN",
+            "TP1",
+        ]:
+            continue
+
+        try:
+
+            result = evaluate_signal(
+                signal
+            )
+
+            if result:
+
+                print(
+                    "RESULT:",
+                    signal["symbol"],
+                    signal["direction"],
+                    result
+                )
+
+                old_result = signal.get(
+                    "result"
+                )
+
+                changed = update_signal_status(
+                    signal,
+                    result
+                )
+
+                if changed:
+
+                    if old_result != result:
+                        update_learning(
+                            signal,
+                            result
+                        )
+
+                    if result == "tp1":
+                        send_telegram(
+                            "🎯 TP1 فعال شد\n\n"
+                            f"🪙 {signal['symbol']}\n"
+                            f"📊 {signal['direction']}\n"
+                            "ربات همچنان نتیجه نهایی را "
+                            "بررسی می‌کند."
+                        )
+
+                    elif result == "tp2":
+                        send_telegram(
+                            "✅ TP2 تکمیل شد\n\n"
+                            f"🪙 {signal['symbol']}\n"
+                            f"📊 {signal['direction']}\n"
+                            "الگو با موفقیت ثبت شد."
+                        )
+
+                    elif result == "sl":
+                        send_telegram(
+                            "🛑 حد ضرر فعال شد\n\n"
+                            f"🪙 {signal['symbol']}\n"
+                            f"📊 {signal['direction']}\n"
+                            "نتیجه برای یادگیری ذخیره شد."
+)
+                                            elif result == "ambiguous":
+                        send_telegram(
+                            "⚠️ نتیجه نامشخص\n\n"
+                            f"🪙 {signal['symbol']}\n"
+                            "در یک کندل هم TP و هم SL "
+                            "قابل مشاهده بوده؛ "
+                            "این مورد به عنوان موفقیت "
+                            "محسوب نمی‌شود."
+                        )
+
+        except Exception as e:
+
+            print(
+                "SIGNAL RESULT ERROR:",
+                signal.get("symbol"),
+                e
+            )
+
+    # --------------------------------------------------------
+    # تحلیل بازار
+    # --------------------------------------------------------
+
+    print("\n=== شروع تحلیل بازار ===")
+
+    for index, symbol in enumerate(
+        symbols,
+        start=1
+    ):
+
+        print(
+            f"\n[{index}/{len(symbols)}] "
+            f"Analyzing {symbol}"
+        )
+
+        try:
+
+            analysis = analyze_symbol(
+                symbol
+            )
+
+            if not analysis:
+                print(
+                    "No sufficient data:",
+                    symbol
+                )
+                continue
+
+            print(
+                "5m:",
+                analysis["5m"]["buy_score"],
+                "BUY /",
+                analysis["5m"]["sell_score"],
+                "SELL"
+            )
+
+            print(
+                "15m:",
+                analysis["15m"]["buy_score"],
+                "BUY /",
+                analysis["15m"]["sell_score"],
+                "SELL"
+            )
+
+            print(
+                "FINAL:",
+                analysis["direction"],
+                analysis["score"]
+            )
+
+            # WAIT = هیچ سیگنالی تولید نمی‌کنیم
+            if analysis["direction"] == "WAIT":
+                continue
+
+            signal = create_signal(
+                analysis
+            )
+
+            if not signal:
+                continue
+
+            duplicate = is_duplicate_signal(
+                signals,
+                signal["symbol"],
+                signal["direction"],
+                signal["pattern_id"]
+                        if duplicate:
+
+                print(
+                    "DUPLICATE SIGNAL IGNORED:",
+                    symbol
+                )
+
+                continue
+
+            signals.append(signal)
+            new_signals.append(signal)
+
+            send_telegram(
+                signal_to_message(signal)
+            )
+
+            print(
+                "NEW SIGNAL:",
+                symbol,
+                signal["direction"]
+            )
+
+            # کمی فاصله برای API
+            time.sleep(0.2)
+
+        except Exception as e:
+
+            print(
+                "ANALYSIS ERROR:",
+                symbol,
+                e
+            )
+
+    # --------------------------------------------------------
+    # ذخیره
+    # --------------------------------------------------------
+
+    save_signals(signals)
+
+    stats = statistics()
+
+    print("\n")
+    print("=" * 60)
+    print("MARKET SCAN FINISHED")
+    print("=" * 60)
+
+    print(
+        "Symbols:",
+        len(symbols)
+    )
+
+    print(
+        "New signals:",
+        len(new_signals)
+    )
+
+    print(
+        "Completed:",
+        stats["total_completed"]
+    )
+
+    print(
+        "TP1:",
+        stats["tp1"]
+    )
+
+    print(
+        "TP2:",
+        stats["tp2"]
+    )
+
+    print(
+        "SL:",
+        stats["sl"]
+    )
+
+    print(
+        "Ambiguous:",
+        stats["ambiguous"]
+    )
+
+    print(
+        "Open:",
+        stats["open"]
+    )
+
+    print(
+        "Accuracy:",
+        stats["accuracy"]
+    )
+
+    # --------------------------------------------------------
+    # گزارش آماری تلگرام
+    # --------------------------------------------------------
+
+    if stats["total_completed"] > 0:
+
+        accuracy_text = (
+            f"{stats['accuracy']}%"
+            if stats["accuracy"] is not None
+            else "نداریم"
+        )
+
+        message = (
+            "📊 گزارش یادگیری ربات Tabdeal\n\n"
+            f"🔎 نمادهای بررسی‌شده: {len(symbols)}\n"
+            f"🆕 سیگنال جدید: {len(new_signals)}\n"
+            f"📌 نتایج ثبت‌شده: "
+            f"{stats['total_completed']}\n\n"
+            f"🎯 TP1: {stats['tp1']}\n"
+            f"✅ TP2: {stats['tp2']}\n"
+            f"🛑 SL: {stats['sl']}\n"
+            f"⚠️ نامشخص: {stats['ambiguous']}\n\n"
+            f"📈 دقت فعلی ثبت‌شده: "
+            f"{accuracy_text}\n\n"
+            f"📂 الگوهای ذخیره‌شده در:\n"
+            f"{LEARNING_FILE}"
+        )
+
+        send_telegram(message)
+
+
+# ============================================================
+# Entry Point
+#============================================================
+
+def main():
+
+    print(
+        "\n"
+        "====================================================\n"
+        " TABDEAL AI-STYLE ANALYSIS / LEARNING BOT\n"
+        " Analysis Only - NO TRADE EXECUTION\n"
+        "====================================================\n"
+    )
+
+    print(
+        "Started:",
+        now_iso()
+    )
+
+    try:
+
+        scan_market()
+
+    except Exception as e:
+
+        print(
+            "\nFATAL ERROR:",
+            e
+        )
+
+        send_telegram(
+            "❌ خطای اصلی ربات تحلیل Tabdeal\n\n"
+            f"{str(e)[:1000]}"
+        )
+
+        raise
+
+
+if __name__ == "__main__":
+    main()
+
