@@ -934,6 +934,14 @@ def create_signal(analysis):
     if atr_value <= 0:
         return None
 
+    
+    pattern_id = create_pattern_fingerprint(
+        analysis
+    )
+
+    history_score = historical_pattern_score(
+        pattern_id
+    )
     if direction == "BUY":
 
         stop_loss = price - (
@@ -948,7 +956,7 @@ def create_signal(analysis):
             atr_value * TP2_ATR
         )
 
-        elif direction == "SELL":
+    elif direction == "SELL":
 
         stop_loss = price + (
             atr_value * SL_ATR
@@ -964,14 +972,6 @@ def create_signal(analysis):
 
     else:
         return None
-    pattern_id = create_pattern_fingerprint(
-        analysis
-    )
-
-    history_score = historical_pattern_score(
-        pattern_id
-    )
-
     return {
         "id": hashlib.sha256(
             (
