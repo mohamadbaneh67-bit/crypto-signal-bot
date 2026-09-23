@@ -948,7 +948,7 @@ def create_signal(analysis):
             atr_value * TP2_ATR
         )
 
-    elif direction == "SELL":
+        elif direction == "SELL":
 
         stop_loss = price + (
             atr_value * SL_ATR
@@ -962,8 +962,8 @@ def create_signal(analysis):
             atr_value * TP2_ATR
         )
 
-        else:return None
-
+    else:
+        return None
     pattern_id = create_pattern_fingerprint(
         analysis
     )
