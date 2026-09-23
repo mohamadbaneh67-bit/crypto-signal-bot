@@ -1138,7 +1138,7 @@ def evaluate_signal(signal):
             if hit_sl:
                 return "sl"
 
-        # ----------------------------------------------------
+                # ----------------------------------------------------
         # SELL
         # ----------------------------------------------------
 
@@ -1153,6 +1153,7 @@ def evaluate_signal(signal):
 
             if hit_sl and hit_tp1:
                 return "ambiguous"
+
             if hit_tp2:
                 return "tp2"
 
