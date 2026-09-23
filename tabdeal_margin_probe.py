@@ -1060,7 +1060,8 @@ def signal_to_message(signal):
 # ============================================================
 
 def evaluate_signal(signal):
-                if signal.get("status") == "CLOSED":
+
+    if signal.get("status") == "CLOSED":
         return None
 
     symbol = signal["symbol"]
