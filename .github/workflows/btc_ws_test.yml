@@ -1,4 +1,4 @@
-name: BTC Tabdeal Futures WebSocket Test
+name: BTC Tabdeal WebSocket Test
 
 on:
   workflow_dispatch:
@@ -19,5 +19,5 @@ jobs:
       - name: Install websocket
         run: pip install websocket-client
 
-      - name: Run BTC WebSocket Test
-        run: python tabdeal_btc_ws_test.py
+      - name: Run WebSocket test
+        run: timeout 60 python tabdeal_btc_ws_test.py
