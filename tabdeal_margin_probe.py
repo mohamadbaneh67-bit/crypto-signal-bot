@@ -962,8 +962,7 @@ def create_signal(analysis):
             atr_value * TP2_ATR
         )
 
-        else:
-        return None
+        else:return None
 
     pattern_id = create_pattern_fingerprint(
         analysis
