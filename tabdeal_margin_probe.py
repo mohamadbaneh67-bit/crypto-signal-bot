@@ -962,8 +962,8 @@ def create_signal(analysis):
             atr_value * TP2_ATR
         )
 
-    else:
-         return None
+        else:
+        return None
 
     pattern_id = create_pattern_fingerprint(
         analysis
@@ -1061,8 +1061,7 @@ def signal_to_message(signal):
 # ============================================================
 
 def evaluate_signal(signal):
-
-    if signal.get("status") == "CLOSED":
+                if signal.get("status") == "CLOSED":
         return None
 
     symbol = signal["symbol"]
@@ -1155,7 +1154,6 @@ def evaluate_signal(signal):
 
             if hit_sl and hit_tp1:
                 return "ambiguous"
-
             if hit_tp2:
                 return "tp2"
 
@@ -1210,8 +1208,8 @@ def statistics():
     ambiguous = 0
     open_count = 0
 
-    for signal in signals
-    
+    for signal in signals:
+
         result = signal.get("result")
 
         if result:
@@ -1293,6 +1291,7 @@ def scan_market():
     # --------------------------------------------------------
 
     print("\n=== بررسی نتایج سیگنال‌های قبلی ===")
+
     for signal in signals:
 
         if signal.get("status") not in [
@@ -1356,8 +1355,9 @@ def scan_market():
                             f"🪙 {signal['symbol']}\n"
                             f"📊 {signal['direction']}\n"
                             "نتیجه برای یادگیری ذخیره شد."
-)
-                                            elif result == "ambiguous":
+                        )
+
+                    elif result == "ambiguous":
                         send_telegram(
                             "⚠️ نتیجه نامشخص\n\n"
                             f"🪙 {signal['symbol']}\n"
@@ -1442,7 +1442,9 @@ def scan_market():
                 signal["symbol"],
                 signal["direction"],
                 signal["pattern_id"]
-                        if duplicate:
+            )
+
+            if duplicate:
 
                 print(
                     "DUPLICATE SIGNAL IGNORED:",
@@ -1566,7 +1568,7 @@ def scan_market():
 
 # ============================================================
 # Entry Point
-#============================================================
+# ============================================================
 
 def main():
 
@@ -1604,4 +1606,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
