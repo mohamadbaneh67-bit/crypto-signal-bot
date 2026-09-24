@@ -659,4 +659,519 @@ print(
     " فقط 5 ارز | 5m + 15m\n"
     " بدون اجرای معامله\n"
     "===================================================="
+            )# ============================================================
+# بخش 2 - Market Depth / Indicators / Analysis
+# ============================================================
+
+def get_order_book(symbol, limit=100):
+
+    params = {
+        "symbol": tabdeal_symbol(symbol),
+        "limit": limit,
+    }
+
+    data = api_get(
+        DEPTH_PATHS,
+        params=params
+    )
+
+    if not isinstance(data, dict):
+        return None
+
+    bids = data.get("bids", [])
+    asks = data.get("asks", [])
+
+    if not bids or not asks:
+        return None
+
+    bid_volume = 0.0
+    ask_volume = 0.0
+
+    best_bid = 0.0
+    best_ask = 0.0
+
+    for row in bids:
+        if len(row) < 2:
+            continue
+
+        price = safe_float(row[0])
+        qty = safe_float(row[1])
+
+        if price > best_bid:
+            best_bid = price
+
+        bid_volume += qty
+
+    for row in asks:
+        if len(row) < 2:
+            continue
+
+        price = safe_float(row[0])
+        qty = safe_float(row[1])
+
+        if best_ask == 0 or price < best_ask:
+            best_ask = price
+
+        ask_volume += qty
+
+    total = bid_volume + ask_volume
+
+    if total > 0:
+        buy_pressure = (
+            bid_volume / total
+        ) * 100
+
+        sell_pressure = (
+            ask_volume / total
+        ) * 100
+    else:
+        buy_pressure = 50.0
+        sell_pressure = 50.0
+
+    spread = 0.0
+
+    if best_bid > 0 and best_ask > 0:
+        spread = (
+            (best_ask - best_bid)
+            / best_bid
+        ) * 100
+
+    return {
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "bid_volume": bid_volume,
+        "ask_volume": ask_volume,
+        "buy_pressure": buy_pressure,
+        "sell_pressure": sell_pressure,
+        "spread_percent": spread,
+    }
+
+
+# ============================================================
+# Indicators
+# ============================================================
+
+def sma(values, period):
+
+    if len(values) < period:
+        return None
+
+    return (
+        sum(values[-period:])
+        / period
+    )
+
+
+def ema(values, period):
+
+    if len(values) < period:
+        return None
+
+    multiplier = (
+        2 / (period + 1)
+    )
+
+    result = sum(
+        values[:period]
+    ) / period
+
+    for value in values[period:]:
+
+        result = (
+            (value - result)
+            * multiplier
+        ) + result
+
+    return result
+
+
+def rsi(values, period=14):
+
+    if len(values) < period + 1:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(values)):
+
+        change = (
+            values[i]
+            - values[i - 1]
+        )
+
+        if change >= 0:
+
+            gains.append(change)
+            losses.append(0.0)
+
+        else:
+
+            gains.append(0.0)
+            losses.append(
+                abs(change)
             )
+
+    avg_gain = (
+        sum(gains[:period])
+        / period
+    )
+
+    avg_loss = (
+        sum(losses[:period])
+        / period
+    )
+
+    for i in range(
+        period,
+        len(gains)
+    ):
+
+        avg_gain = (
+            (
+                avg_gain
+                * (period - 1)
+            )
+            + gains[i]
+        ) / period
+
+        avg_loss = (
+            (
+                avg_loss
+                * (period - 1)
+            )
+            + losses[i]
+        ) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = (
+        avg_gain
+        / avg_loss
+    )
+
+    return 100 - (
+        100 / (1 + rs)
+    )
+
+
+def atr(candles, period=14):
+
+    if len(candles) < period + 1:
+        return None
+
+    true_ranges = []
+
+    for i in range(
+        1,
+        len(candles)
+    ):
+
+        current = candles[i]
+        previous = candles[i - 1]
+
+        high = current["high"]
+        low = current["low"]
+        previous_close = previous["close"]
+
+        true_range = max(
+            high - low,
+            abs(
+                high
+                - previous_close
+            ),
+            abs(
+                low
+                - previous_close
+            ),
+        )
+
+        true_ranges.append(
+            true_range
+        )
+
+    if len(true_ranges) < period:
+        return None
+
+    return (
+        sum(
+            true_ranges[-period:]
+        )
+        / period
+    )
+
+
+def volume_ratio(
+    candles,
+    period=20
+):
+
+    if len(candles) < period + 1:
+        return 1.0
+
+    current = candles[-1]["volume"]
+
+    previous = [
+        candle["volume"]
+        for candle in
+        candles[-period-1:-1]
+    ]
+
+    if not previous:
+        return 1.0
+
+    average = (
+        sum(previous)
+        / len(previous)
+    )
+
+    if average <= 0:
+        return 1.0
+
+    return (
+        current / average
+    )
+
+
+# ============================================================
+# Candle Momentum
+# ============================================================
+
+def momentum_percent(
+    candles,
+    lookback=5
+):
+
+    if len(candles) <= lookback:
+        return 0.0
+
+    old_price = candles[
+        -lookback - 1
+    ]["close"]
+
+    current_price = candles[
+        -1
+    ]["close"]
+
+    if old_price <= 0:
+        return 0.0
+
+    return (
+        (
+            current_price
+            - old_price
+        )
+        / old_price
+    ) * 100
+
+
+# ============================================================
+# تحلیل یک تایم‌فریم
+# ============================================================
+
+def analyze_timeframe(
+    candles
+):
+
+    if len(candles) < 60:
+        return None
+
+    closes = [
+        candle["close"]
+        for candle in candles
+    ]
+
+    price = closes[-1]
+
+    ema9 = ema(
+        closes,
+        9
+    )
+
+    ema21 = ema(
+        closes,
+        21
+    )
+
+    ema50 = ema(
+        closes,
+        50
+    )
+
+    rsi_value = rsi(
+        closes,
+        14
+    )
+
+    atr_value = atr(
+        candles,
+        14
+    )
+
+    vol_ratio = volume_ratio(
+        candles,
+        20
+    )
+
+    momentum = momentum_percent(
+        candles,
+        5
+    )
+
+    if any(
+        value is None
+        for value in [
+            ema9,
+            ema21,
+            ema50,
+            rsi_value,
+            atr_value,
+        ]
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # MACD
+    # --------------------------------------------------------
+
+    ema12 = ema(
+        closes,
+        12
+    )
+
+    ema26 = ema(
+        closes,
+        26
+    )
+
+    macd_value = 0.0
+
+    if (
+        ema12 is not None
+        and ema26 is not None
+    ):
+        macd_value = (
+            ema12
+            - ema26
+        )
+
+    # --------------------------------------------------------
+    # روند
+    # --------------------------------------------------------
+
+    bullish = (
+        ema9 > ema21
+        and ema21 > ema50
+        and price > ema21
+    )
+
+    bearish = (
+        ema9 < ema21
+        and ema21 < ema50
+        and price < ema21
+    )
+
+    # --------------------------------------------------------
+    # BUY SCORE
+    # --------------------------------------------------------
+
+    buy_score = 0
+
+    if price > ema9:
+        buy_score += 10
+
+    if ema9 > ema21:
+        buy_score += 15
+
+    if ema21 > ema50:
+        buy_score += 15
+
+    if rsi_value >= 50:
+        buy_score += 10
+
+    if 50 <= rsi_value <= 68:
+        buy_score += 10
+
+    if macd_value > 0:
+        buy_score += 10
+
+    if vol_ratio >= 1.2:
+        buy_score += 10
+
+    if momentum > 0:
+        buy_score += 5
+
+    if bullish:
+        buy_score += 15
+
+    # --------------------------------------------------------
+    # SELL SCORE
+    # --------------------------------------------------------
+
+    sell_score = 0
+
+    if price < ema9:
+        sell_score += 10
+
+    if ema9 < ema21:
+        sell_score += 15
+
+    if ema21 < ema50:
+        sell_score += 15
+
+    if rsi_value <= 50:
+        sell_score += 10
+
+    if 32 <= rsi_value <= 50:
+        sell_score += 10
+
+    if macd_value < 0:
+        sell_score += 10
+
+    if vol_ratio >= 1.2:
+        sell_score += 10
+
+    if momentum < 0:
+        sell_score += 5
+
+    if bearish:
+        sell_score += 15
+
+    # --------------------------------------------------------
+    # نوسان
+    # --------------------------------------------------------
+
+    volatility_percent = 0.0
+
+    if price > 0:
+        volatility_percent = (
+            atr_value / price
+        ) * 100
+
+    return {
+        "price": price,
+        "ema9": ema9,
+        "ema21": ema21,
+        "ema50": ema50,
+        "rsi": rsi_value,
+        "atr": atr_value,
+        "volume_ratio": vol_ratio,
+        "momentum": momentum,
+        "macd": macd_value,
+        "bullish": bullish,
+        "bearish": bearish,
+        "buy_score": buy_score,
+        "sell_score": sell_score,
+        "volatility_percent":
+            volatility_percent,
+    }
+
+
+# ============================================================
+# پایان بخش 2
+# ============================================================
+
+print(
+    "TABDEAL FUTURES BOT - PART 2 LOADED"
+    )
