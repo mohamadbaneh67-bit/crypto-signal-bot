@@ -1269,7 +1269,7 @@ def create_signal(
 
         "buy_score":
             analysis["buy_score"],
-
+        
         "sell_score":
             analysis["sell_score"],
 
