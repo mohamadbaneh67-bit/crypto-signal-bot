@@ -5,108 +5,40 @@ import hashlib
 import requests
 from datetime import datetime, timezone
 
-# ============================================================
-# ربات تحلیل حرفه‌ای Futures تبدیل (Tabdeal)
-# فقط تحلیل - بدون اجرای معامله
-#
-# ارزها:
-# BTC / ETH / ADA / DOGE / SOL
-#
-# تایم‌فریم:
-# 5m + 15m
-#
-# خروجی:
-# BUY / SELL / WAIT
-# Entry / TP1 / TP2 / SL
-# نوسان
-# اهرم تحلیلی
-# علت سیگنال
-# نتیجه و یادگیری
-# ============================================================
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# ------------------------------------------------------------
-# فقط همین 5 ارز
-# ------------------------------------------------------------
+EXCHANGE_INFO_URL = "https://api1.tabdeal.org/fapi/v1/exchangeInfo"
+DEPTH_URL = "https://api1.tabdeal.org/fapi/v1/depth"
 
-TARGET_SYMBOLS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    "ADAUSDT",
-    "DOGEUSDT",
-    "SOLUSDT",
-]
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "ADAUSDT", "DOGEUSDT", "SOLUSDT"]
 
-# ------------------------------------------------------------
-# Tabdeal Futures API
-# ------------------------------------------------------------
+TIMEFRAMES = {
+    "5m": 5,
+    "15m": 15,
+}
 
-EXCHANGE_INFO_URLS = [
-    "https://api1.tabdeal.org/r/fapi/v1/exchangeInfo",
-    "https://api1.tabdeal.org/fapi/v1/exchangeInfo",
-]
-
-KLINE_URLS = [
-    "https://api1.tabdeal.org/r/fapi/v1/klines",
-    "https://api1.tabdeal.org/fapi/v1/klines",
-]
-
-# ------------------------------------------------------------
-# فایل‌های ذخیره‌سازی
-# ------------------------------------------------------------
-
+SNAPSHOT_FILE = "tabdeal_market_history.json"
 LEARNING_FILE = "tabdeal_learning.json"
 SIGNALS_FILE = "tabdeal_signals.json"
 
-# ------------------------------------------------------------
-# تنظیمات
-# ------------------------------------------------------------
-
-TIMEFRAMES = ["5m", "15m"]
-
-KLINE_LIMIT = 150
-
-# حداقل امتیاز
 MIN_SIGNAL_SCORE = 70
+DEDUP_MINUTES = 60
 
-# حداقل اختلاف BUY و SELL
-MIN_DIRECTION_GAP = 8
-
-# جلوگیری از تکرار سیگنال
-DEDUP_MINUTES = 90
-
-# اهداف بر اساس ATR
 TP1_ATR = 1.0
 TP2_ATR = 2.0
 SL_ATR = 1.2
 
 MAX_STORED_SIGNALS = 3000
-
-# ------------------------------------------------------------
-# اهرم تحلیلی
-#
-# این عدد اهرم واقعی حساب تبدیل نیست.
-# فقط از فاصله SL برای مدیریت ریسک تخمین زده می‌شود.
-# ------------------------------------------------------------
-
-MAX_ANALYTICAL_LEVERAGE = 20
-
-# حداکثر زیان فرضی روی مارجین در صورت رسیدن به SL
-TARGET_MARGIN_LOSS_AT_SL = 5.0
+MAX_SNAPSHOTS_PER_SYMBOL = 2500
 
 SESSION = requests.Session()
 
 SESSION.headers.update({
-    "User-Agent": "Tabdeal-Analysis-Bot/3.0",
+    "User-Agent": "Tabdeal-Analysis-Bot/2.0",
     "Accept": "application/json",
 })
 
-
-# ============================================================
-# عمومی
-# ============================================================
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -120,6 +52,7 @@ def safe_float(value, default=0.0):
 
 
 def load_json(filename, default):
+
     if not os.path.exists(filename):
         return default
 
@@ -128,13 +61,21 @@ def load_json(filename, default):
             return json.load(f)
 
     except Exception as e:
-        print(f"JSON LOAD ERROR [{filename}]:", e)
+
+        print(
+            f"JSON LOAD ERROR [{filename}]:",
+            e
+        )
+
         return default
 
 
 def save_json(filename, data):
+
     try:
+
         with open(filename, "w", encoding="utf-8") as f:
+
             json.dump(
                 data,
                 f,
@@ -145,7 +86,12 @@ def save_json(filename, data):
         return True
 
     except Exception as e:
-        print(f"JSON SAVE ERROR [{filename}]:", e)
+
+        print(
+            f"JSON SAVE ERROR [{filename}]:",
+            e
+        )
+
         return False
 
 
@@ -156,17 +102,25 @@ def save_json(filename, data):
 def send_telegram(text):
 
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram secrets are missing.")
+
+        print(
+            "Telegram secrets are missing."
+        )
+
         return False
 
     try:
 
         response = SESSION.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+
+            f"https://api.telegram.org/bot"
+            f"{TELEGRAM_BOT_TOKEN}/sendMessage",
+
             json={
                 "chat_id": TELEGRAM_CHAT_ID,
-                "text": text[:3900],
+                "text": text,
             },
+
             timeout=20,
         )
 
@@ -175,17 +129,14 @@ def send_telegram(text):
 
         print(
             "Telegram HTTP ERROR:",
-            response.status_code
-        )
-
-        print(
+            response.status_code,
             response.text[:500]
         )
 
     except Exception as e:
 
         print(
-            "Telegram ERROR:",
+            "Telegram error:",
             e
         )
 
@@ -196,130 +147,364 @@ def send_telegram(text):
 # API
 # ============================================================
 
-def api_get(urls, params=None):
+def api_get(url, params=None):
 
-    last_error = None
+    try:
 
-    for url in urls:
+        response = SESSION.get(
+            url,
+            params=params,
+            timeout=20
+        )
 
-        try:
+        print(
+            "REQUEST:",
+            response.url,
+            "STATUS:",
+            response.status_code
+        )
 
-            response = SESSION.get(
-                url,
-                params=params,
-                timeout=25
-            )
+        if response.ok:
 
-            print(
-                "REQUEST:",
-                url,
-                "STATUS:",
-                response.status_code
-            )
+            return response.json()
 
-            if response.ok:
+        print(
+            "API ERROR:",
+            response.status_code,
+            response.text[:300]
+        )
 
-                try:
-                    return response.json()
+    except Exception as e:
 
-                except Exception as e:
-                    last_error = (
-                        f"JSON error: {e}"
-                    )
-
-            else:
-
-                last_error = (
-                    f"HTTP {response.status_code}: "
-                    f"{response.text[:300]}"
-                )
-
-        except Exception as e:
-
-            last_error = str(e)
-
-    print(
-        "API ERROR:",
-        last_error
-    )
+        print(
+            "API ERROR:",
+            e
+        )
 
     return None
 
 
-# ============================================================
-# Symbols
-# ============================================================
-
 def normalize_symbol(symbol):
 
     return (
-        str(symbol)
+        symbol
         .replace("_", "")
         .replace("-", "")
         .upper()
-        )# ============================================================
-# دریافت کندل‌ها
-# ============================================================
-
-def get_klines(symbol, interval, limit=KLINE_LIMIT):
-
-    api_symbol = normalize_symbol(symbol)
-
-    params = {
-        "symbol": api_symbol,
-        "interval": interval,
-        "limit": limit,
-    }
-
-    data = api_get(
-        KLINE_URLS,
-        params=params
     )
 
-    if not isinstance(data, list):
-        return []
+
+def get_exchange_info():
+
+    return api_get(
+        EXCHANGE_INFO_URL
+    )
+
+
+# ============================================================
+# Order Book / Market Data
+# ============================================================
+
+def get_current_market(symbol):
+
+    data = api_get(
+
+        DEPTH_URL,
+
+        {
+            "symbol": normalize_symbol(symbol),
+            "limit": 20,
+        },
+    )
+
+    if not isinstance(data, dict):
+        return None
+
+    bids = data.get("bids") or []
+    asks = data.get("asks") or []
+
+    if not bids or not asks:
+        return None
+
+    try:
+
+        best_bid = safe_float(
+            bids[0][0]
+        )
+
+        best_ask = safe_float(
+            asks[0][0]
+        )
+
+        bid_qty = sum(
+            safe_float(x[1])
+            for x in bids[:20]
+        )
+
+        ask_qty = sum(
+            safe_float(x[1])
+            for x in asks[:20]
+        )
+
+    except Exception:
+
+        return None
+
+    if best_bid <= 0 or best_ask <= 0:
+        return None
+
+    price = (
+        best_bid +
+        best_ask
+    ) / 2.0
+
+    spread_pct = (
+
+        (best_ask - best_bid)
+        / price
+        * 100.0
+
+        if price
+        else 0.0
+    )
+
+    total_qty = (
+        bid_qty +
+        ask_qty
+    )
+
+    imbalance = (
+
+        (bid_qty - ask_qty)
+        / total_qty
+
+        if total_qty > 0
+        else 0.0
+    )
+
+    return {
+
+        "timestamp":
+            time.time(),
+
+        "iso":
+            now_iso(),
+
+        "price":
+            price,
+
+        "best_bid":
+            best_bid,
+
+        "best_ask":
+            best_ask,
+
+        "spread_pct":
+            spread_pct,
+
+        "bid_qty":
+            bid_qty,
+
+        "ask_qty":
+            ask_qty,
+
+        "imbalance":
+            imbalance,
+    }
+
+
+# ============================================================
+# History
+# ============================================================
+
+def candle_bucket(
+    timestamp,
+    minutes
+):
+
+    seconds = minutes * 60
+
+    return int(
+        timestamp // seconds
+    ) * seconds
+
+
+def load_market_history():
+
+    data = load_json(
+        SNAPSHOT_FILE,
+        {}
+    )
+
+    if not isinstance(data, dict):
+
+        data = {}
+
+    for symbol in SYMBOLS:
+
+        if not isinstance(
+            data.get(symbol),
+            list
+        ):
+
+            data[symbol] = []
+
+    return data
+
+
+def save_market_history(history):
+
+    for symbol in SYMBOLS:
+
+        history[symbol] = (
+            history.get(symbol, [])
+            [-MAX_SNAPSHOTS_PER_SYMBOL:]
+        )
+
+    save_json(
+        SNAPSHOT_FILE,
+        history
+    )
+
+
+def add_snapshot(
+    history,
+    symbol,
+    market
+):
+
+    history.setdefault(
+        symbol,
+        []
+    ).append(market)
+
+    history[symbol] = (
+        history[symbol]
+        [-MAX_SNAPSHOTS_PER_SYMBOL:]
+    )
+
+
+def build_candles(
+    snapshots,
+    minutes
+):
+
+    buckets = {}
+
+    for s in snapshots:
+
+        ts = safe_float(
+            s.get("timestamp")
+        )
+
+        price = safe_float(
+            s.get("price")
+        )
+
+        if ts <= 0 or price <= 0:
+            continue
+
+        bucket = candle_bucket(
+            ts,
+            minutes
+        )
+
+        buckets.setdefault(
+            bucket,
+            []
+        ).append(s)
 
     candles = []
 
-    for row in data:
+    for bucket in sorted(buckets):
 
-        if not isinstance(row, list):
+        rows = buckets[bucket]
+
+        prices = [
+            safe_float(
+                x.get("price")
+            )
+            for x in rows
+        ]
+
+        prices = [
+            p for p in prices
+            if p > 0
+        ]
+
+        if not prices:
             continue
 
-        if len(row) < 6:
-            continue
+        candles.append({
 
-        try:
+            "open_time":
+                int(bucket * 1000),
 
-            candles.append({
-                "open_time": int(row[0]),
-                "open": safe_float(row[1]),
-                "high": safe_float(row[2]),
-                "low": safe_float(row[3]),
-                "close": safe_float(row[4]),
-                "volume": safe_float(row[5]),
-            })
+            "open":
+                prices[0],
 
-        except Exception:
-            continue
+            "high":
+                max(prices),
+
+            "low":
+                min(prices),
+
+            "close":
+                prices[-1],
+
+            "volume":
+                sum(
+                    abs(
+                        safe_float(
+                            x.get(
+                                "imbalance"
+                            )
+                        )
+                    )
+                    for x in rows
+                ),
+
+            "samples":
+                len(rows),
+        })
 
     return candles
 
 
 # ============================================================
-# اندیکاتورها
+# Indicators
 # ============================================================
 
-def ema(values, period):
+def sma(
+    values,
+    period
+):
 
     if len(values) < period:
         return None
 
-    multiplier = 2 / (period + 1)
+    return (
+        sum(values[-period:])
+        / period
+    )
 
-    result = sum(
-        values[:period]
-    ) / period
+
+def ema(
+    values,
+    period
+):
+
+    if len(values) < period:
+        return None
+
+    multiplier = (
+        2 / (period + 1)
+    )
+
+    result = (
+        sum(values[:period])
+        / period
+    )
 
     for price in values[period:]:
 
@@ -331,7 +516,10 @@ def ema(values, period):
     return result
 
 
-def rsi(values, period=14):
+def rsi(
+    values,
+    period=14
+):
 
     if len(values) < period + 1:
         return None
@@ -339,22 +527,23 @@ def rsi(values, period=14):
     gains = []
     losses = []
 
-    for i in range(1, len(values)):
+    for i in range(
+        1,
+        len(values)
+    ):
 
         change = (
             values[i]
             - values[i - 1]
         )
 
-        if change > 0:
-            gains.append(change)
-            losses.append(0)
+        gains.append(
+            max(change, 0)
+        )
 
-        else:
-            gains.append(0)
-            losses.append(
-                abs(change)
-            )
+        losses.append(
+            max(-change, 0)
+        )
 
     avg_gain = (
         sum(gains[:period])
@@ -390,15 +579,18 @@ def rsi(values, period=14):
     if avg_loss == 0:
         return 100.0
 
-    rs = avg_gain / avg_loss
-
-    return (
-        100
-        - (100 / (1 + rs))
+    rs = (
+        avg_gain /
+        avg_loss
     )
 
-
-def atr(candles, period=14):
+    return (
+        100 -
+        (100 / (1 + rs))
+    )def atr(
+    candles,
+    period=14
+):
 
     if len(candles) < period + 1:
         return None
@@ -413,14 +605,20 @@ def atr(candles, period=14):
         current = candles[i]
         previous = candles[i - 1]
 
-        high = current["high"]
-        low = current["low"]
-        previous_close = previous["close"]
-
         tr = max(
-            high - low,
-            abs(high - previous_close),
-            abs(low - previous_close)
+
+            current["high"]
+            - current["low"],
+
+            abs(
+                current["high"]
+                - previous["close"]
+            ),
+
+            abs(
+                current["low"]
+                - previous["close"]
+            ),
         )
 
         trs.append(tr)
@@ -428,56 +626,77 @@ def atr(candles, period=14):
     if len(trs) < period:
         return None
 
-    return (
-        sum(trs[-period:])
-        / period
-    )
+    return sum(
+        trs[-period:]
+    ) / period
 
 
-def volume_ratio(
-    candles,
-    period=20
+def orderbook_imbalance(
+    candles
 ):
 
-    if len(candles) < period + 1:
-        return 1.0
+    if not candles:
+        return 0.0
 
-    recent = candles[-1]["volume"]
-
-    previous = [
-        candle["volume"]
-        for candle
-        in candles[
-            -period - 1:-1
-        ]
-    ]
-
-    if not previous:
-        return 1.0
-
-    average = (
-        sum(previous)
-        / len(previous)
+    return safe_float(
+        candles[-1].get(
+            "book_imbalance"
+        ),
+        0.0
     )
 
-    if average <= 0:
-        return 1.0
 
-    return recent / average
+def attach_latest_imbalance(
+    candles,
+    snapshots,
+    minutes
+):
+
+    if not candles or not snapshots:
+        return candles
+
+    latest = snapshots[-1]
+
+    value = safe_float(
+        latest.get("imbalance")
+    )
+
+    bucket = candle_bucket(
+        safe_float(
+            latest.get("timestamp")
+        ),
+        minutes
+    )
+
+    for candle in reversed(candles):
+
+        if candle["open_time"] == int(
+            bucket * 1000
+        ):
+
+            candle[
+                "book_imbalance"
+            ] = value
+
+            break
+
+    return candles
 
 
 # ============================================================
-# تحلیل یک تایم‌فریم
+# Timeframe Analysis
 # ============================================================
 
-def analyze_timeframe(candles):
+def analyze_timeframe(
+    candles
+):
 
-    if len(candles) < 60:
+    if len(candles) < 55:
         return None
 
     closes = [
-        candle["close"]
-        for candle in candles
+        c["close"]
+        for c in candles
     ]
 
     current_price = closes[-1]
@@ -497,16 +716,6 @@ def analyze_timeframe(candles):
         50
     )
 
-    ema12 = ema(
-        closes,
-        12
-    )
-
-    ema26 = ema(
-        closes,
-        26
-    )
-
     rsi_value = rsi(
         closes,
         14
@@ -517,231 +726,250 @@ def analyze_timeframe(candles):
         14
     )
 
-    vol_ratio = volume_ratio(
-        candles,
-        20
-    )
-
     if any(
-        value is None
-        for value in [
+        v is None
+        for v in [
             ema9,
             ema21,
             ema50,
-            ema12,
-            ema26,
             rsi_value,
             atr_value,
         ]
     ):
         return None
 
-    macd_value = (
-        ema12
-        - ema26
+    ema12 = ema(
+        closes,
+        12
     )
 
-    # --------------------------------------------------------
-    # روند
-    # --------------------------------------------------------
+    ema26 = ema(
+        closes,
+        26
+    )
+
+    if (
+        ema12 is not None
+        and ema26 is not None
+    ):
+
+        macd_value = (
+            ema12 - ema26
+        )
+
+    else:
+
+        macd_value = 0.0
+
+    imbalance = (
+        orderbook_imbalance(
+            candles
+        )
+    )
+
+    atr_pct = (
+
+        atr_value
+        / current_price
+        * 100
+
+        if current_price
+        else 0.0
+    )
 
     bullish = (
+
         ema9 > ema21
-        and ema21 > ema50
-        and current_price > ema21
+        > ema50
+
+        and current_price
+        > ema21
     )
 
     bearish = (
+
         ema9 < ema21
-        and ema21 < ema50
-        and current_price < ema21
+        < ema50
+
+        and current_price
+        < ema21
     )
 
     # --------------------------------------------------------
-    # BUY
+    # BUY SCORE
     # --------------------------------------------------------
 
     buy_score = 0
-    buy_reasons = []
 
     if current_price > ema9:
         buy_score += 15
-        buy_reasons.append(
-            "قیمت بالای EMA9"
-        )
 
     if ema9 > ema21:
         buy_score += 15
-        buy_reasons.append(
-            "EMA9 بالای EMA21"
-        )
 
     if ema21 > ema50:
         buy_score += 15
-        buy_reasons.append(
-            "روند میان‌مدت صعودی"
-        )
 
     if rsi_value >= 50:
         buy_score += 10
 
     if 50 <= rsi_value <= 68:
         buy_score += 10
-        buy_reasons.append(
-            "RSI مناسب خرید"
-        )
 
     if macd_value > 0:
         buy_score += 10
-        buy_reasons.append(
-            "MACD مثبت"
-        )
 
-    if vol_ratio >= 1.2:
+    if imbalance >= 0.15:
         buy_score += 10
-        buy_reasons.append(
-            "افزایش حجم"
-        )
 
     if bullish:
         buy_score += 15
-        buy_reasons.append(
-            "تأیید روند صعودی"
-        )
 
     # --------------------------------------------------------
-    # SELL
+    # SELL SCORE
     # --------------------------------------------------------
 
     sell_score = 0
-    sell_reasons = []
 
     if current_price < ema9:
         sell_score += 15
-        sell_reasons.append(
-            "قیمت زیر EMA9"
-        )
 
     if ema9 < ema21:
         sell_score += 15
-        sell_reasons.append(
-            "EMA9 زیر EMA21"
-        )
 
     if ema21 < ema50:
         sell_score += 15
-        sell_reasons.append(
-            "روند میان‌مدت نزولی"
-        )
 
     if rsi_value <= 50:
         sell_score += 10
 
     if 32 <= rsi_value <= 50:
         sell_score += 10
-        sell_reasons.append(
-            "RSI مناسب فروش"
-        )
 
     if macd_value < 0:
         sell_score += 10
-        sell_reasons.append(
-            "MACD منفی"
-        )
 
-    if vol_ratio >= 1.2:
+    if imbalance <= -0.15:
         sell_score += 10
-        sell_reasons.append(
-            "افزایش حجم"
-        )
 
     if bearish:
         sell_score += 15
-        sell_reasons.append(
-            "تأیید روند نزولی"
-        )
 
     return {
-        "price": current_price,
-        "ema9": ema9,
-        "ema21": ema21,
-        "ema50": ema50,
-        "rsi": rsi_value,
-        "atr": atr_value,
-        "volume_ratio": vol_ratio,
-        "macd": macd_value,
-        "buy_score": buy_score,
-        "sell_score": sell_score,
-        "bullish": bullish,
-        "bearish": bearish,
-        "buy_reasons": buy_reasons,
-        "sell_reasons": sell_reasons,
+
+        "price":
+            current_price,
+
+        "ema9":
+            ema9,
+
+        "ema21":
+            ema21,
+
+        "ema50":
+            ema50,
+
+        "rsi":
+            rsi_value,
+
+        "atr":
+            atr_value,
+
+        "atr_pct":
+            atr_pct,
+
+        "macd":
+            macd_value,
+
+        "imbalance":
+            imbalance,
+
+        "buy_score":
+            buy_score,
+
+        "sell_score":
+            sell_score,
+
+        "bullish":
+            bullish,
+
+        "bearish":
+            bearish,
     }
 
 
 # ============================================================
-# تحلیل همزمان 5 و 15 دقیقه
+# Multi Timeframe
 # ============================================================
 
-def analyze_symbol(symbol):
+def analyze_symbol(
+    symbol,
+    history
+):
 
-    candles_5m = get_klines(
+    snapshots = history.get(
         symbol,
-        "5m",
-        KLINE_LIMIT
+        []
     )
 
-    time.sleep(0.15)
-
-    candles_15m = get_klines(
-        symbol,
-        "15m",
-        KLINE_LIMIT
+    candles_5m = build_candles(
+        snapshots,
+        5
     )
 
-    if not candles_5m:
-        return None
+    candles_15m = build_candles(
+        snapshots,
+        15
+    )
 
-    if not candles_15m:
-        return None
+    candles_5m = (
+        attach_latest_imbalance(
+            candles_5m,
+            snapshots,
+            5
+        )
+    )
 
-    analysis_5m = analyze_timeframe(
+    candles_15m = (
+        attach_latest_imbalance(
+            candles_15m,
+            snapshots,
+            15
+        )
+    )
+
+    a5 = analyze_timeframe(
         candles_5m
     )
 
-    analysis_15m = analyze_timeframe(
+    a15 = analyze_timeframe(
         candles_15m
     )
 
-    if not analysis_5m:
-        return None
-
-    if not analysis_15m:
+    if not a5 or not a15:
         return None
 
     buy_score = (
-        analysis_5m["buy_score"] * 0.45
+
+        a5["buy_score"] * 0.45
+
         +
-        analysis_15m["buy_score"] * 0.55
+
+        a15["buy_score"] * 0.55
     )
 
     sell_score = (
-        analysis_5m["sell_score"] * 0.45
-        +
-        analysis_15m["sell_score"] * 0.55
-    )
 
-    difference = abs(
-        buy_score
-        - sell_score
+        a5["sell_score"] * 0.45
+
+        +
+
+        a15["sell_score"] * 0.55
     )
 
     if (
         buy_score >= MIN_SIGNAL_SCORE
-        and
-        buy_score > sell_score
-        and
-        difference >= MIN_DIRECTION_GAP
+        and buy_score > sell_score
     ):
 
         direction = "BUY"
@@ -749,10 +977,7 @@ def analyze_symbol(symbol):
 
     elif (
         sell_score >= MIN_SIGNAL_SCORE
-        and
-        sell_score > buy_score
-        and
-        difference >= MIN_DIRECTION_GAP
+        and sell_score > buy_score
     ):
 
         direction = "SELL"
@@ -767,36 +992,88 @@ def analyze_symbol(symbol):
             sell_score
         )
 
-    # ATR تایم 5 دقیقه برای نقطه ورود
-    price = analysis_5m["price"]
-    atr_value = analysis_5m["atr"]
+    volatility = max(
+        a5["atr_pct"],
+        a15["atr_pct"]
+    )
+
+    leverage = suggested_leverage(
+        volatility,
+        score
+    )
 
     return {
-        "symbol": symbol,
-        "direction": direction,
-        "score": round(
-            score,
-            2
-        ),
-        "buy_score": round(
-            buy_score,
-            2
-        ),
-        "sell_score": round(
-            sell_score,
-            2
-        ),
-        "price": price,
-        "atr": atr_value,
-        "5m": analysis_5m,
-        "15m": analysis_15m,
-        "candles_5m": candles_5m,
-        "candles_15m": candles_15m,
+
+        "symbol":
+            symbol,
+
+        "direction":
+            direction,
+
+        "score":
+            round(
+                score,
+                2
+            ),
+
+        "price":
+            a5["price"],
+
+        "atr":
+            a5["atr"],
+
+        "volatility_pct":
+            round(
+                volatility,
+                3
+            ),
+
+        "suggested_leverage":
+            leverage,
+
+        "5m":
+            a5,
+
+        "15m":
+            a15,
+
+        "candles_5m":
+            candles_5m,
+
+        "candles_15m":
+            candles_15m,
     }
 
 
 # ============================================================
-# تشخیص الگوی بازار
+# Analytical Leverage
+# ============================================================
+
+def suggested_leverage(
+    volatility_pct,
+    score
+):
+
+    if score < MIN_SIGNAL_SCORE:
+        return 1
+
+    if volatility_pct <= 0.25:
+        return 10
+
+    if volatility_pct <= 0.45:
+        return 7
+
+    if volatility_pct <= 0.75:
+        return 5
+
+    if volatility_pct <= 1.20:
+        return 3
+
+    return 2
+
+
+# ============================================================
+# Pattern Fingerprint
 # ============================================================
 
 def create_pattern_fingerprint(
@@ -806,124 +1083,108 @@ def create_pattern_fingerprint(
     a5 = analysis["5m"]
     a15 = analysis["15m"]
 
-    def bucket_rsi(value):
+    def rsi_bucket(v):
 
-        if value < 35:
-            return "RSI_LOW"
+        if v < 35:
+            return "LOW"
 
-        if value < 45:
-            return "RSI_WEAK"
+        if v < 45:
+            return "WEAK"
 
-        if value < 55:
-            return "RSI_MID"
+        if v < 55:
+            return "MID"
 
-        if value < 65:
-            return "RSI_STRONG"
+        if v < 65:
+            return "STRONG"
 
-        return "RSI_HIGH"
-
-    def bucket_volume(value):
-
-        if value < 0.8:
-            return "VOL_LOW"
-
-        if value < 1.2:
-            return "VOL_NORMAL"
-
-        if value < 2:
-            return "VOL_HIGH"
-
-        return "VOL_SPIKE"
+        return "HIGH"
 
     parts = [
 
         analysis["direction"],
 
         (
-            "5M_BULL"
+            "5B"
             if a5["bullish"]
             else
-            "5M_BEAR"
+            "5S"
             if a5["bearish"]
             else
-            "5M_MIXED"
+            "5M"
         ),
 
         (
-            "15M_BULL"
+            "15B"
             if a15["bullish"]
             else
-            "15M_BEAR"
+            "15S"
             if a15["bearish"]
             else
-            "15M_MIXED"
+            "15M"
         ),
 
-        bucket_rsi(
+        rsi_bucket(
             a5["rsi"]
         ),
 
-        bucket_rsi(
+        rsi_bucket(
             a15["rsi"]
         ),
 
-        bucket_volume(
-            a5["volume_ratio"]
+        (
+            "BOOK+"
+            if a5["imbalance"] > 0.15
+            else
+            "BOOK-"
+            if a5["imbalance"] < -0.15
+            else
+            "BOOK0"
         ),
 
         (
-            "MACD_POS"
+            "MACD+"
             if a5["macd"] > 0
             else
-            "MACD_NEG"
+            "MACD-"
         ),
     ]
 
-    raw = "|".join(parts)
-
     return hashlib.sha256(
-        raw.encode("utf-8")
-    ).hexdigest()[:20]# ============================================================
-# سیستم یادگیری
+        "|".join(parts).encode()
+    ).hexdigest()[:20]
+
+
+# ============================================================
+# Learning
 # ============================================================
 
 def get_learning_data():
 
-    default = {
-        "patterns": {},
-        "stats": {
-            "total": 0,
-            "tp1": 0,
-            "tp2": 0,
-            "sl": 0,
-            "ambiguous": 0,
-            "unknown": 0,
-        }
-    }
-
     data = load_json(
+
         LEARNING_FILE,
-        default
+
+        {
+            "patterns": {},
+
+            "stats": {
+                "total": 0,
+                "tp1": 0,
+                "tp2": 0,
+                "sl": 0,
+                "ambiguous": 0,
+                "unknown": 0,
+            },
+        }
     )
 
-    if not isinstance(data, dict):
-        return default
+    data.setdefault(
+        "patterns",
+        {}
+    )
 
-    if "patterns" not in data:
-        data["patterns"] = {}
-
-    if "stats" not in data:
-        data["stats"] = default["stats"].copy()
-
-    return data
-
-
-def get_pattern_history(pattern_id):
-
-    learning = get_learning_data()
-
-    return learning["patterns"].get(
-        pattern_id,
+    data.setdefault(
+        "stats",
         {
             "total": 0,
             "tp1": 0,
@@ -934,36 +1195,54 @@ def get_pattern_history(pattern_id):
         }
     )
 
+    return data
 
-def historical_pattern_score(pattern_id):
 
-    history = get_pattern_history(
-        pattern_id
+def historical_pattern_score(
+    pattern_id
+):
+
+    history = (
+        get_learning_data()
+        ["patterns"]
+        .get(
+            pattern_id,
+            {}
+        )
     )
 
-    completed = (
-        history.get("tp1", 0)
-        +
-        history.get("tp2", 0)
-        +
-        history.get("sl", 0)
-        +
-        history.get("ambiguous", 0)
+    total = sum(
+        history.get(k, 0)
+        for k in [
+            "tp1",
+            "tp2",
+            "sl",
+            "ambiguous"
+        ]
     )
 
-    if completed < 3:
+    if total < 3:
         return None
 
-    successful = (
-        history.get("tp1", 0)
-        +
-        history.get("tp2", 0)
-    )
-
     return round(
-        successful
-        / completed
+
+        (
+            history.get(
+                "tp1",
+                0
+            )
+
+            +
+
+            history.get(
+                "tp2",
+                0
+            )
+        )
+
+        / total
         * 100,
+
         2
     )
 
@@ -973,448 +1252,54 @@ def update_learning(
     result
 ):
 
-    learning = get_learning_data()
+    learning = (
+        get_learning_data()
+    )
 
-    pattern_id = signal[
+    pid = signal[
         "pattern_id"
     ]
 
-    if pattern_id not in learning[
-        "patterns"
-    ]:
+    pattern = (
+        learning["patterns"]
+        .setdefault(
 
-        learning["patterns"][
-            pattern_id
-        ] = {
-            "total": 0,
-            "tp1": 0,
-            "tp2": 0,
-            "sl": 0,
-            "ambiguous": 0,
-            "unknown": 0,
-        }
+            pid,
 
-    pattern = learning[
-        "patterns"
-    ][pattern_id]
+            {
+                "total": 0,
+                "tp1": 0,
+                "tp2": 0,
+                "sl": 0,
+                "ambiguous": 0,
+                "unknown": 0,
+            }
+        )
+    )
 
     pattern["total"] += 1
 
-    if result in pattern:
-        pattern[result] += 1
-    else:
-        pattern["unknown"] += 1
+    pattern[
+        result
+        if result in pattern
+        else "unknown"
+    ] += 1
 
-    learning["stats"]["total"] += 1
+    learning["stats"][
+        "total"
+    ] += 1
 
-    if result in learning[
-        "stats"
-    ]:
-
-        learning["stats"][
-            result
-        ] += 1
-
-    else:
-
-        learning["stats"][
-            "unknown"
-        ] += 1
+    learning["stats"][
+        result
+        if result in learning["stats"]
+        else "unknown"
+    ] += 1
 
     save_json(
         LEARNING_FILE,
         learning
     )
 
-
-# ============================================================
-# اهرم تحلیلی
-# ============================================================
-
-def estimate_leverage(
-    entry,
-    stop_loss,
-    score,
-    atr_value
-):
-
-    if entry <= 0:
-        return 1
-
-    distance_percent = (
-        abs(entry - stop_loss)
-        / entry
-        * 100
-    )
-
-    if distance_percent <= 0:
-        return 1
-
-    # اهرم بر اساس فاصله حد ضرر
-    leverage = (
-        TARGET_MARGIN_LOSS_AT_SL
-        / distance_percent
-    )
-
-    # تعدیل بر اساس قدرت سیگنال
-    if score >= 90:
-        leverage *= 1.20
-
-    elif score >= 80:
-        leverage *= 1.10
-
-    elif score < 75:
-        leverage *= 0.85
-
-    leverage = max(
-        1,
-        min(
-            leverage,
-            MAX_ANALYTICAL_LEVERAGE
-        )
-    )
-
-    # گرد کردن به اعداد کاربردی
-    choices = [
-        1, 2, 3, 5,
-        7, 10, 12,
-        15, 20
-    ]
-
-    selected = min(
-        choices,
-        key=lambda x:
-        abs(x - leverage)
-    )
-
-    return selected
-
-
-# ============================================================
-# نوسان بازار
-# ============================================================
-
-def volatility_level(
-    price,
-    atr_value
-):
-
-    if price <= 0 or atr_value <= 0:
-        return {
-            "level": "UNKNOWN",
-            "percent": 0.0
-        }
-
-    atr_percent = (
-        atr_value
-        / price
-        * 100
-    )
-
-    if atr_percent < 0.30:
-        level = "LOW"
-
-    elif atr_percent < 0.70:
-        level = "NORMAL"
-
-    elif atr_percent < 1.20:
-        level = "HIGH"
-
-    else:
-        level = "VERY_HIGH"
-
-    return {
-        "level": level,
-        "percent": round(
-            atr_percent,
-            3
-        )
-    }
-
-
-# ============================================================
-# ساخت سیگنال
-# ============================================================
-
-def create_signal(
-    analysis
-):
-
-    direction = analysis[
-        "direction"
-    ]
-
-    if direction == "WAIT":
-        return None
-
-    price = analysis[
-        "price"
-    ]
-
-    atr_value = analysis[
-        "atr"
-    ]
-
-    if price <= 0:
-        return None
-
-    if atr_value <= 0:
-        return None
-
-    pattern_id = (
-        create_pattern_fingerprint(
-            analysis
-        )
-    )
-
-    history_score = (
-        historical_pattern_score(
-            pattern_id
-        )
-    )
-
-    if direction == "BUY":
-
-        stop_loss = (
-            price
-            - atr_value * SL_ATR
-        )
-
-        tp1 = (
-            price
-            + atr_value * TP1_ATR
-        )
-
-        tp2 = (
-            price
-            + atr_value * TP2_ATR
-        )
-
-    elif direction == "SELL":
-
-        stop_loss = (
-            price
-            + atr_value * SL_ATR
-        )
-
-        tp1 = (
-            price
-            - atr_value * TP1_ATR
-        )
-
-        tp2 = (
-            price
-            - atr_value * TP2_ATR
-        )
-
-    else:
-        return None
-
-    volatility = volatility_level(
-        price,
-        atr_value
-    )
-
-    leverage = estimate_leverage(
-        price,
-        stop_loss,
-        analysis["score"],
-        atr_value
-    )
-
-    if direction == "BUY":
-
-        reasons = (
-            analysis["5m"]["buy_reasons"]
-            +
-            analysis["15m"]["buy_reasons"]
-        )
-
-    else:
-
-        reasons = (
-            analysis["5m"]["sell_reasons"]
-            +
-            analysis["15m"]["sell_reasons"]
-        )
-
-    # حذف علت‌های تکراری
-    reasons = list(
-        dict.fromkeys(reasons)
-    )
-
-    return {
-
-        "id": hashlib.sha256(
-            (
-                analysis["symbol"]
-                + direction
-                + str(time.time())
-            ).encode()
-        ).hexdigest()[:16],
-
-        "created_at": now_iso(),
-
-        "created_timestamp":
-            time.time(),
-
-        "symbol":
-            analysis["symbol"],
-
-        "direction":
-            direction,
-
-        "score":
-            analysis["score"],
-
-        "buy_score":
-            analysis["buy_score"],
-        
-        "sell_score":
-            analysis["sell_score"],
-
-        "entry":
-            price,
-
-        "tp1":
-            tp1,
-
-        "tp2":
-            tp2,
-
-        "stop_loss":
-            stop_loss,
-
-        "atr":
-            atr_value,
-
-        "volatility":
-            volatility,
-
-        "analytical_leverage":
-            leverage,
-
-        "pattern_id":
-            pattern_id,
-
-        "historical_pattern_score":
-            history_score,
-
-        "reasons":
-            reasons,
-
-        "status":
-            "OPEN",
-
-        "result":
-            None,
-    }
-
-
-# ============================================================
-# پیام سیگنال
-# ============================================================
-
-def signal_to_message(
-    signal
-):
-
-    direction = signal[
-        "direction"
-    ]
-
-    if direction == "BUY":
-        side = "🟢 خرید / Long"
-
-    else:
-        side = "🔴 فروش / Short"
-
-    history = signal.get(
-        "historical_pattern_score"
-    )
-
-    if history is None:
-        history_text = (
-            "هنوز داده کافی ندارد"
-        )
-
-    else:
-        history_text = (
-            f"{history}%"
-        )
-
-    reasons = signal.get(
-        "reasons",
-        []
-    )
-
-    if reasons:
-
-        reason_text = "\n".join(
-            f"• {reason}"
-            for reason in reasons[:8]
-        )
-
-    else:
-
-        reason_text = (
-            "شرایط تکنیکال همسو شده است."
-        )
-
-    volatility = signal.get(
-        "volatility",
-        {}
-    )
-
-    return (
-        "🚨 سیگنال تحلیل Futures تبدیل\n\n"
-
-        f"🪙 ارز: {signal['symbol']}\n"
-        f"📊 جهت: {side}\n\n"
-
-        f"💰 ورود: {signal['entry']}\n"
-        f"🎯 TP1: {signal['tp1']}\n"
-        f"🎯 TP2: {signal['tp2']}\n"
-        f"🛑 SL: {signal['stop_loss']}\n\n"
-
-        f"📈 امتیاز سیگنال: "
-        f"{signal['score']}%\n"
-
-        f"🟢 BUY: "
-        f"{signal['buy_score']}%\n"
-
-        f"🔴 SELL: "
-        f"{signal['sell_score']}%\n\n"
-
-        f"⚡ اهرم تحلیلی پیشنهادی: "
-        f"{signal['analytical_leverage']}x\n"
-
-        f"🌊 نوسان: "
-        f"{volatility.get('level', 'UNKNOWN')}\n"
-
-        f"📐 ATR نوسان: "
-        f"{volatility.get('percent', 0)}%\n\n"
-
-        f"🧠 سابقه همین الگو: "
-        f"{history_text}\n\n"
-
-        "📌 علت سیگنال:\n"
-        f"{reason_text}\n\n"
-
-        "⏱ تایم‌فریم‌ها: 5m + 15m\n"
-
-        "⚠️ اهرم بالا ریسک بالایی دارد. "
-        "عدد اهرم بالا فقط تحلیل ربات است "
-        "و به معنی اهرم واقعی حساب تبدیل نیست.\n\n"
-
-        "🤖 وضعیت: فقط تحلیل؛ "
-        "فعلاً هیچ معامله‌ای باز نمی‌شود."
-    )
-
-
-# ============================================================
-# ذخیره سیگنال‌ها
-# ============================================================
 
 def load_signals():
 
@@ -1423,31 +1308,27 @@ def load_signals():
         []
     )
 
-    if not isinstance(data, list):
-        return []
-
-    return data
+    return (
+        data
+        if isinstance(
+            data,
+            list
+        )
+        else []
+    )
 
 
 def save_signals(
     signals
 ):
 
-    if len(signals) > MAX_STORED_SIGNALS:
-
-        signals = signals[
-            -MAX_STORED_SIGNALS:
-        ]
-
     save_json(
         SIGNALS_FILE,
-        signals
+        signals[
+            -MAX_STORED_SIGNALS:
+        ]
     )
 
-
-# ============================================================
-# بررسی تکراری بودن
-# ============================================================
 
 def is_duplicate_signal(
     signals,
@@ -1466,251 +1347,148 @@ def is_duplicate_signal(
             "status"
         ) not in [
             "OPEN",
-            "TP1",
+            "TP1"
         ]:
-
             continue
 
-        if signal.get(
-            "symbol"
-        ) != symbol:
-
+        if (
+            signal.get(
+                "symbol"
+            ) != symbol
+        ):
             continue
 
-        if signal.get(
-            "direction"
-        ) != direction:
-
+        if (
+            signal.get(
+                "direction"
+            ) != direction
+        ):
             continue
 
-        if signal.get(
-            "pattern_id"
-        ) != pattern_id:
-
+        if (
+            signal.get(
+                "pattern_id"
+            ) != pattern_id
+        ):
             continue
 
-        created_at = signal.get(
-            "created_timestamp",
-            0
-        )
+        age = (
 
-        age_minutes = (
-            now - created_at
+            now
+            - safe_float(
+                signal.get(
+                    "created_timestamp"
+                )
+            )
+
         ) / 60
 
-        if age_minutes < DEDUP_MINUTES:
+        if age < DEDUP_MINUTES:
             return True
 
     return False
 
 
 # ============================================================
-# ارزیابی نتیجه سیگنال
+# Signal
 # ============================================================
 
-def evaluate_signal(
-    signal
+def create_signal(
+    analysis
 ):
 
-    symbol = signal[
-        "symbol"
+    if (
+        analysis["direction"]
+        == "WAIT"
+        or
+        analysis["atr"] <= 0
+    ):
+        return None
+
+    price = analysis[
+        "price"
     ]
 
-    direction = signal[
+    atr_value = analysis[
+        "atr"
+    ]
+
+    direction = analysis[
         "direction"
     ]
 
-    candles = get_klines(
-        symbol,
-        "5m",
-        100
-    )
+    if direction == "BUY":
 
-    if not candles:
-        return None
-
-    entry = safe_float(
-        signal.get("entry")
-    )
-
-    tp1 = safe_float(
-        signal.get("tp1")
-    )
-
-    tp2 = safe_float(
-        signal.get("tp2")
-    )
-
-    sl = safe_float(
-        signal.get("stop_loss")
-    )
-
-    for candle in candles:
-
-        candle_time = (
-            candle["open_time"]
-            / 1000
+        stop_loss = (
+            price
+            - atr_value * SL_ATR
         )
 
-        if candle_time <= (
-            signal.get(
-                "created_timestamp",
-                0
-            )
-        ):
-            continue
-
-        high = candle["high"]
-        low = candle["low"]
-
-        if direction == "BUY":
-
-            hit_tp2 = high >= tp2
-            hit_tp1 = high >= tp1
-            hit_sl = low <= sl
-
-        else:
-
-            hit_tp2 = low <= tp2
-            hit_tp1 = low <= tp1
-            hit_sl = high >= sl
-
-        # اگر در یک کندل TP و SL هر دو لمس شوند
-        if (
-            hit_sl
-            and
-            (
-                hit_tp1
-                or hit_tp2
-            )
-        ):
-
-            return "ambiguous"
-
-        if hit_tp2:
-            return "tp2"
-
-        if hit_tp1:
-            return "tp1"
-
-        if hit_sl:
-            return "sl"
-
-    return None
-
-
-# ============================================================
-# تغییر وضعیت
-# ============================================================
-
-def update_signal_status(
-    signal,
-    result
-):
-
-    if result == "tp1":
-
-        if signal.get(
-            "status"
-        ) == "OPEN":
-
-            signal["status"] = "TP1"
-            signal["result"] = "tp1"
-            signal["result_at"] = now_iso()
-
-            return True
-
-        return False
-
-    if result in [
-        "tp2",
-        "sl",
-        "ambiguous",
-    ]:
-
-        if signal.get(
-            "status"
-        ) in [
-            "OPEN",
-            "TP1",
-        ]:
-
-            signal["status"] = (
-                result.upper()
-            )
-
-            signal["result"] = result
-
-            signal["result_at"] = (
-                now_iso()
-            )
-
-            return True
-
-    return False
-
-
-# ============================================================
-# آمار
-# ============================================================
-
-def statistics():
-
-    signals = load_signals()
-
-    tp1 = 0
-    tp2 = 0
-    sl = 0
-    ambiguous = 0
-    open_count = 0
-
-    for signal in signals:
-
-        status = signal.get(
-            "status"
+        tp1 = (
+            price
+            + atr_value * TP1_ATR
         )
 
-        if status == "TP1":
-            tp1 += 1
-
-        elif status == "TP2":
-            tp2 += 1
-
-        elif status == "SL":
-            sl += 1
-
-        elif status == "AMBIGUOUS":
-            ambiguous += 1
-
-        elif status == "OPEN":
-            open_count += 1
-
-    completed = (
-        tp1
-        + tp2
-        + sl
-        + ambiguous
-    )
-
-    if completed > 0:
-
-        accuracy = round(
-            (
-                tp1 + tp2
-            )
-            / completed
-            * 100,
-            2
+        tp2 = (
+            price
+            + atr_value * TP2_ATR
         )
 
     else:
 
-        accuracy = None
+        stop_loss = (
+            price
+            + atr_value * SL_ATR
+        )
+
+        tp1 = (
+            price
+            - atr_value * TP1_ATR
+        )
+
+        tp2 = (
+            price
+            - atr_value * TP2_ATR
+        )
+
+    pattern_id = (
+        create_pattern_fingerprint(
+            analysis
+        )
+    )
 
     return {
 
-        "total_completed":
-            completed,
+        "id":
+            hashlib.sha256(
+
+                (
+                    analysis["symbol"]
+                    +
+                    direction
+                    +
+                    str(time.time())
+                ).encode()
+
+            ).hexdigest()[:16],
+
+        "created_at":
+            now_iso(),
+
+        "created_timestamp":
+            time.time(),
+
+        "symbol":
+            analysis["symbol"],
+
+        "direction":
+            direction,
+
+        "score":
+            analysis["score"],
+
+        "entry":
+            price,
 
         "tp1":
             tp1,
@@ -1718,14 +1496,289 @@ def statistics():
         "tp2":
             tp2,
 
+        "stop_loss":
+            stop_loss,
+
+        "pattern_id":
+            pattern_id,
+
+        "historical_pattern_score":
+            historical_pattern_score(
+                pattern_id
+            ),
+
+        "suggested_leverage":
+            analysis[
+                "suggested_leverage"
+            ],
+
+        "volatility_pct":
+            analysis[
+                "volatility_pct"
+            ],
+
+        "status":
+            "OPEN",
+
+        "result":
+            None,
+            }def signal_to_message(
+    signal
+):
+
+    history = signal[
+        "historical_pattern_score"
+    ]
+
+    history_text = (
+
+        f"{history}%"
+
+        if history is not None
+
+        else
+
+        "هنوز داده کافی ندارد"
+    )
+
+    return (
+
+        "🚨 سیگنال تحلیل Tabdeal\n\n"
+
+        f"🪙 {signal['symbol']}\n"
+
+        f"📊 جهت: "
+        f"{signal['direction']}\n"
+
+        f"🎯 امتیاز: "
+        f"{signal['score']}%\n"
+
+        f"📈 نوسان: "
+        f"{signal['volatility_pct']}%\n"
+
+        f"⚡ اهرم پیشنهادی تحلیلی: "
+        f"{signal['suggested_leverage']}x\n\n"
+
+        f"💰 ورود: "
+        f"{signal['entry']:.8g}\n"
+
+        f"🎯 TP1: "
+        f"{signal['tp1']:.8g}\n"
+
+        f"🎯 TP2: "
+        f"{signal['tp2']:.8g}\n"
+
+        f"🛑 SL: "
+        f"{signal['stop_loss']:.8g}\n\n"
+
+        f"🧠 سابقه الگو: "
+        f"{history_text}\n"
+
+        "⚠️ فقط تحلیل است؛ "
+        "معامله خودکار فعال نیست."
+    )
+
+
+def get_result_price(
+    symbol
+):
+
+    market = get_current_market(
+        symbol
+    )
+
+    if market:
+
+        return market[
+            "price"
+        ]
+
+    return None
+
+
+def evaluate_signal(
+    signal
+):
+
+    price = get_result_price(
+        signal["symbol"]
+    )
+
+    if price is None:
+        return None
+
+    if signal[
+        "direction"
+    ] == "BUY":
+
+        if price <= signal[
+            "stop_loss"
+        ]:
+
+            return "sl"
+
+        if price >= signal[
+            "tp2"
+        ]:
+
+            return "tp2"
+
+        if price >= signal[
+            "tp1"
+        ]:
+
+            return "tp1"
+
+    else:
+
+        if price >= signal[
+            "stop_loss"
+        ]:
+
+            return "sl"
+
+        if price <= signal[
+            "tp2"
+        ]:
+
+            return "tp2"
+
+        if price <= signal[
+            "tp1"
+        ]:
+
+            return "tp1"
+
+    return None
+
+
+def update_signal_status(
+    signal,
+    result
+):
+
+    old = signal.get(
+        "result"
+    )
+
+    if result == "tp1":
+
+        signal[
+            "status"
+        ] = "TP1"
+
+    elif result in [
+        "tp2",
+        "sl",
+        "ambiguous"
+    ]:
+
+        signal[
+            "status"
+        ] = "CLOSED"
+
+    signal[
+        "result"
+    ] = result
+
+    return old != result
+
+
+def is_final_result(
+    result
+):
+
+    return result in [
+        "tp2",
+        "sl",
+        "ambiguous"
+    ]
+
+
+def statistics():
+
+    signals = load_signals()
+
+    counts = {
+
+        "tp1": 0,
+        "tp2": 0,
+        "sl": 0,
+        "ambiguous": 0,
+        "open": 0,
+    }
+
+    for s in signals:
+
+        result = s.get(
+            "result"
+        )
+
+        if result in counts:
+
+            counts[
+                result
+            ] += 1
+
+        elif s.get(
+            "status"
+        ) in [
+            "OPEN",
+            "TP1"
+        ]:
+
+            counts[
+                "open"
+            ] += 1
+
+    completed = (
+
+        counts["tp2"]
+
+        +
+
+        counts["sl"]
+
+        +
+
+        counts["ambiguous"]
+    )
+
+    accuracy = (
+
+        round(
+            counts["tp2"]
+            / completed
+            * 100,
+            2
+        )
+
+        if completed
+
+        else
+
+        None
+    )
+
+    return {
+
+        "total_completed":
+            completed,
+
+        "tp1":
+            counts["tp1"],
+
+        "tp2":
+            counts["tp2"],
+
         "sl":
-            sl,
+            counts["sl"],
 
         "ambiguous":
-            ambiguous,
+            counts["ambiguous"],
 
         "open":
-            open_count,
+            counts["open"],
 
         "accuracy":
             accuracy,
@@ -1733,42 +1786,12 @@ def statistics():
 
 
 # ============================================================
-# اسکن بازار
+# Previous Signals
 # ============================================================
 
-def scan_market():
-
-    print("\n")
-    print("=" * 60)
-    print(
-        "TABDEAL FUTURES "
-        "5-SYMBOL SCANNER"
-    )
-    print("=" * 60)
-
-    symbols = TARGET_SYMBOLS
-
-    print(
-        "\nارزهای انتخاب‌شده:"
-    )
-
-    for symbol in symbols:
-        print(
-            " -",
-            symbol
-        )
-
-    signals = load_signals()
-
-    new_signals = []
-
-    # --------------------------------------------------------
-    # بررسی سیگنال‌های قبلی
-    # --------------------------------------------------------
-
-    print(
-        "\n=== بررسی نتایج قبلی ==="
-    )
+def process_previous_signals(
+    signals
+):
 
     for signal in signals:
 
@@ -1776,7 +1799,7 @@ def scan_market():
             "status"
         ) not in [
             "OPEN",
-            "TP1",
+            "TP1"
         ]:
 
             continue
@@ -1787,60 +1810,374 @@ def scan_market():
                 signal
             )
 
-            if not result:
-                continue
-
-            print(
-                "RESULT:",
-                signal["symbol"],
-                signal["direction"],
+            if result and update_signal_status(
+                signal,
                 result
-            )
+            ):
 
-            old_result = signal.get(
-                "result"
-            )
-
-            changed = (
-                update_signal_status(
-                    signal,
+                if is_final_result(
                     result
-                )
-            )
-
-            if changed:
-
-                if old_result != result:
+                ):
 
                     update_learning(
                         signal,
                         result
                     )
 
-                if result == "tp1":
+                label = {
 
-                    send_telegram(
-                        "🎯 TP1 فعال شد\n\n"
-                        f"🪙 {signal['symbol']}\n"
-                        f"📊 {signal['direction']}\n"
-                        "نتیجه نهایی هنوز "
-                        "در حال بررسی است."
-                    )
+                    "tp1":
+                        "🎯 TP1",
 
-                elif result == "tp2":
+                    "tp2":
+                        "✅ TP2 / نتیجه نهایی",
 
-                    send_telegram(
-                        "✅ TP2 تکمیل شد\n\n"
-                        f"🪙 {signal['symbol']}\n"
-                        f"📊 {signal['direction']}\n"
-                        "الگوی موفق ذخیره شد."
-                    )
+                    "sl":
+                        "🛑 SL / نتیجه نهایی",
 
-                elif result == "sl":
+                    "ambiguous":
+                        "⚠️ نامشخص",
 
-                    send_telegram(
-                        "🛑 حد ضرر فعال شد\n\n"
-                        f"🪙 {signal['symbol']}\n"
-                        f"📊 {signal['direction']}\n"
-                        "نتیجه برای یادگیری ذخیره شد."
+                }.get(
+                    result,
+                    result.upper()
+                )
+
+                send_telegram(
+
+                    "📌 نتیجه سیگنال Tabdeal\n\n"
+
+                    f"🪙 "
+                    f"{signal['symbol']}\n"
+
+                    f"📊 "
+                    f"{signal['direction']}\n"
+
+                    f"نتیجه: {label}"
+                )
+
+        except Exception as e:
+
+            print(
+                "SIGNAL RESULT ERROR:",
+                signal.get("symbol"),
+                e
+            )
+
+
+# ============================================================
+# Main Scanner
+# ============================================================
+
+def scan_market():
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        "TABDEAL 5-COIN FUTURES ANALYSIS BOT"
+    )
+
+    print(
+        "DATA: TABDEAL FUTURES ORDER BOOK"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    info = get_exchange_info()
+
+    if info is None:
+
+        send_telegram(
+            "❌ API اطلاعات بازار "
+            "فیوچرز تبدیل در دسترس نیست."
         )
+
+        return
+
+    history = load_market_history()
+
+    signals = load_signals()
+
+    process_previous_signals(
+        signals
+    )
+
+    new_signals = []
+
+    enough = 0
+
+    for symbol in SYMBOLS:
+
+        try:
+
+            market = get_current_market(
+                symbol
+            )
+
+            if not market:
+
+                print(
+                    "NO MARKET DATA:",
+                    symbol
+                )
+
+                continue
+
+            add_snapshot(
+                history,
+                symbol,
+                market
+            )
+
+            save_market_history(
+                history
+            )
+
+            analysis = analyze_symbol(
+                symbol,
+                history
+            )
+
+            if not analysis:
+
+                print(
+                    symbol,
+                    "داده تاریخی کافی ندارد."
+                )
+
+                continue
+
+            enough += 1
+
+            print(
+
+                symbol,
+
+                "5m",
+                analysis["5m"][
+                    "buy_score"
+                ],
+                "/",
+                analysis["5m"][
+                    "sell_score"
+                ],
+
+                "15m",
+                analysis["15m"][
+                    "buy_score"
+                ],
+                "/",
+                analysis["15m"][
+                    "sell_score"
+                ],
+
+                "FINAL",
+                analysis[
+                    "direction"
+                ],
+
+                analysis[
+                    "score"
+                ],
+
+                "LEV",
+                analysis[
+                    "suggested_leverage"
+                ]
+            )
+
+            if (
+                analysis["direction"]
+                == "WAIT"
+            ):
+
+                continue
+
+            signal = create_signal(
+                analysis
+            )
+
+            if not signal:
+                continue
+
+            if is_duplicate_signal(
+
+                signals,
+
+                symbol,
+
+                signal[
+                    "direction"
+                ],
+
+                signal[
+                    "pattern_id"
+                ]
+
+            ):
+
+                print(
+                    "DUPLICATE:",
+                    symbol
+                )
+
+                continue
+
+            signals.append(
+                signal
+            )
+
+            new_signals.append(
+                signal
+            )
+
+            send_telegram(
+                signal_to_message(
+                    signal
+                )
+            )
+
+            time.sleep(
+                0.2
+            )
+
+        except Exception as e:
+
+            print(
+                "ANALYSIS ERROR:",
+                symbol,
+                e
+            )
+
+    save_market_history(
+        history
+    )
+
+    save_signals(
+        signals
+    )
+
+    stats = statistics()
+
+    print(
+        "MARKET SCAN FINISHED"
+    )
+
+    print(
+        "Symbols:",
+        len(SYMBOLS)
+    )
+
+    print(
+        "Analyzable now:",
+        enough
+    )
+
+    print(
+        "New signals:",
+        len(new_signals)
+    )
+
+    print(
+        "Accuracy:",
+        stats["accuracy"]
+    )
+
+    if enough == 0:
+
+        send_telegram(
+
+            "⏳ ربات Tabdeal اجرا شد، "
+            "اما هنوز داده تاریخی کافی "
+            "برای تحلیل 5m/15m ندارد.\n\n"
+
+            "داده‌های واقعی تبدیل ذخیره "
+            "می‌شوند و با اجرای‌های بعدی، "
+            "تاریخچه ساخته می‌شود."
+        )
+
+    elif stats[
+        "total_completed"
+    ] > 0:
+
+        acc = (
+
+            f"{stats['accuracy']}%"
+
+            if stats["accuracy"]
+            is not None
+
+            else
+
+            "نداریم"
+        )
+
+        send_telegram(
+
+            "📊 گزارش یادگیری Tabdeal\n\n"
+
+            f"🪙 ارزهای ثابت: "
+            f"{len(SYMBOLS)}\n"
+
+            f"🆕 سیگنال جدید: "
+            f"{len(new_signals)}\n"
+
+            f"🎯 TP1: "
+            f"{stats['tp1']}\n"
+
+            f"✅ TP2: "
+            f"{stats['tp2']}\n"
+
+            f"🛑 SL: "
+            f"{stats['sl']}\n"
+
+            f"⚠️ نامشخص: "
+            f"{stats['ambiguous']}\n"
+
+            f"📈 دقت ثبت‌شده: "
+            f"{acc}\n"
+
+            "⚠️ اهرم‌های نمایش‌داده‌شده "
+            "پیشنهادی تحلیلی هستند."
+        )
+
+
+# ============================================================
+# Entry Point
+# ============================================================
+
+def main():
+
+    print(
+        "Started:",
+        now_iso()
+    )
+
+    try:
+
+        scan_market()
+
+    except Exception as e:
+
+        print(
+            "FATAL ERROR:",
+            e
+        )
+
+        send_telegram(
+
+            "❌ خطای اصلی ربات Tabdeal\n\n"
+            +
+            str(e)[:1000]
+        )
+
+        raise
+
+
+if __name__ == "__main__":
+
+    main()
