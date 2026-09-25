@@ -337,7 +337,7 @@ def get_depth(
             for x in bids[:50]
         )
 
-        askdef trade_ws_worker(symbol):
+        def trade_ws_worker(symbol):
     """
     Listen for Tabdeal Futures trade broadcasts.
 
