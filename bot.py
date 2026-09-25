@@ -400,14 +400,11 @@ def trade_ws_worker(symbol):
         "timestamp": timestamp / 1000.0,
     }
 
-
 def trade_ws_worker(symbol):
-    """
-    Listen for Tabdeal Futures trade broadcasts.
+    symbol = normalize_symbol(symbol)
 
-    The public broadcast may use different JSON wrappers,
-    therefore the message parser is intentionally flexible.
-    """
+    def on_message(ws, message):
+
 
     symbol = normalize_symbol(symbol)
 
