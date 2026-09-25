@@ -407,7 +407,8 @@ def get_depth(
         "price": price,
         "quantity": quantity,
         "timestamp": timestamp / 1000.0,
-    }def trade_ws_worker(symbol):
+    }
+    def trade_ws_worker(symbol):
     """
     Listen for Tabdeal Futures trade broadcasts.
 
