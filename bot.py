@@ -364,7 +364,7 @@ def get_depth(
         "imbalance": imbalance,
         "timestamp": time.time(),
     }
-    def extract_trade(data):
+    def trade_ws_worker(symbol):
     return None
 
 
