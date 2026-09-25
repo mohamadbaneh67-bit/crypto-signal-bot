@@ -363,7 +363,8 @@ def get_depth(
         "ask_qty": ask_qty,
         "imbalance": imbalance,
         "timestamp": time.time(),
-    }def extract_trade(data):
+    }
+    def extract_trade(data):
     """
     Extract price and quantity from a Tabdeal Futures
     WebSocket trade message.
