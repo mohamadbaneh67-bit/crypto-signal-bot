@@ -706,4 +706,200 @@ print(
     " فقط 5 ارز | 5m + 15m\n"
     " بدون اجرای معامله\n"
     "===================================================="
+        )# ============================================================
+# JSON STORAGE
+# ============================================================
+
+def load_json(
+    filename,
+    default
+):
+
+    if not os.path.exists(filename):
+        return default
+
+    try:
+
+        with open(
+            filename,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
+            return json.load(f)
+
+    except Exception as e:
+
+        print(
+            f"JSON LOAD ERROR [{filename}]:",
+            e
         )
+
+        return default
+
+
+def save_json(
+    filename,
+    data
+):
+
+    try:
+
+        with open(
+            filename,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                data,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            f"JSON SAVE ERROR [{filename}]:",
+            e
+        )
+
+        return False
+
+
+# ============================================================
+# API REQUEST
+# ============================================================
+
+def api_get(
+    paths,
+    params=None
+):
+
+    if isinstance(
+        paths,
+        str
+    ):
+
+        paths = [paths]
+
+    for base in API_BASES:
+
+        for path in paths:
+
+            url = (
+                base.rstrip("/")
+                +
+                path
+            )
+
+            try:
+
+                response = SESSION.get(
+                    url,
+                    params=params,
+                    timeout=20
+                )
+
+                print(
+                    "REQUEST:",
+                    response.url,
+                    "STATUS:",
+                    response.status_code
+                )
+
+                if response.ok:
+
+                    try:
+
+                        return response.json()
+
+                    except Exception as e:
+
+                        print(
+                            "JSON ERROR:",
+                            e
+                        )
+
+                else:
+
+                    print(
+                        "API ERROR:",
+                        response.status_code,
+                        response.text[:250]
+                    )
+
+            except Exception as e:
+
+                print(
+                    "REQUEST ERROR:",
+                    e
+                )
+
+    return None
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def send_telegram(text):
+
+    if not TELEGRAM_BOT_TOKEN:
+
+        print(
+            "Telegram bot token missing."
+        )
+
+        return False
+
+    if not TELEGRAM_CHAT_ID:
+
+        print(
+            "Telegram chat ID missing."
+        )
+
+        return False
+
+    try:
+
+        response = SESSION.post(
+
+            "https://api.telegram.org/bot"
+            +
+            TELEGRAM_BOT_TOKEN
+            +
+            "/sendMessage",
+
+            json={
+                "chat_id":
+                    TELEGRAM_CHAT_ID,
+
+                "text":
+                    text,
+            },
+
+            timeout=20,
+        )
+
+        if response.ok:
+
+            return True
+
+        print(
+            "TELEGRAM ERROR:",
+            response.status_code,
+            response.text[:300]
+        )
+
+    except Exception as e:
+
+        print(
+            "TELEGRAM REQUEST ERROR:",
+            e
+        )
+
+    return False
