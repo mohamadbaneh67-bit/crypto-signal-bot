@@ -338,7 +338,8 @@ def get_depth(
         )
 
         def trade_ws_worker(symbol):
-    """
+    """    except Exception:
+        return None
     Listen for Tabdeal Futures trade broadcasts.
 
     The public broadcast may use different JSON wrappers,
