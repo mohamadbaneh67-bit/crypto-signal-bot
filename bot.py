@@ -365,7 +365,10 @@ def get_depth(
         "timestamp": time.time(),
     }
     def extract_trade(data):
-    """
+    return None
+
+
+def trade_ws_worker(symbol):
     Extract price and quantity from a Tabdeal Futures
     WebSocket trade message.
     """
