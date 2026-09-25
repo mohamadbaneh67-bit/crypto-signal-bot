@@ -394,24 +394,14 @@ def trade_ws_worker(symbol):
         or 0
     )
 
-    timestamp = (
-        payload.get("T")
-        or payload.get("E")
-        or int(time.time() * 1000)
-    )
-
-    price = safe_float(price)
-    quantity = safe_float(quantity)
-
-    if price <= 0:
-        return None
-
-    return {
+        return {
         "price": price,
         "quantity": quantity,
         "timestamp": timestamp / 1000.0,
     }
-    def trade_ws_worker(symbol):
+
+
+def trade_ws_worker(symbol):
     """
     Listen for Tabdeal Futures trade broadcasts.
 
