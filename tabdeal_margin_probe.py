@@ -893,7 +893,359 @@ def send_telegram(text):
             "TELEGRAM ERROR:",
             response.status_code,
             response.text[:300]
+        )# ============================================================
+# EXCHANGE INFO
+# ============================================================
+
+def get_exchange_info():
+
+    return api_get(
+        EXCHANGE_INFO_PATHS
+    )
+
+
+# ============================================================
+# AVAILABLE FUTURES SYMBOLS
+# ============================================================
+
+def get_available_symbols():
+
+    data = get_exchange_info()
+
+    if not isinstance(
+        data,
+        dict
+    ):
+
+        print(
+            "Exchange information unavailable."
         )
+
+        return set()
+
+    symbols = set()
+
+    rows = data.get(
+        "symbols",
+        []
+    )
+
+    for row in rows:
+
+        if not isinstance(
+            row,
+            dict
+        ):
+
+            continue
+
+        symbol = normalize_symbol(
+            row.get(
+                "symbol",
+                ""
+            )
+        )
+
+        if symbol:
+
+            symbols.add(symbol)
+
+    return symbols
+
+
+# ============================================================
+# DIRECT FUTURES KLINES
+# ============================================================
+
+def get_klines(
+    symbol,
+    interval,
+    limit=200
+):
+
+    params = {
+        "symbol":
+            normalize_symbol(symbol),
+
+        "interval":
+            interval,
+
+        "limit":
+            limit,
+    }
+
+    data = api_get(
+        KLINES_PATHS,
+        params=params
+    )
+
+    if not isinstance(
+        data,
+        list
+    ):
+
+        print(
+            "KLINES ERROR:",
+            symbol,
+            interval
+        )
+
+        return []
+
+    candles = []
+
+    for row in data:
+
+        if not isinstance(
+            row,
+            (list, tuple)
+        ):
+
+            continue
+
+        if len(row) < 6:
+
+            continue
+
+        try:
+
+            candle = {
+                "open_time":
+                    int(
+                        safe_float(
+                            row[0]
+                        )
+                    ),
+
+                "open":
+                    safe_float(
+                        row[1]
+                    ),
+
+                "high":
+                    safe_float(
+                        row[2]
+                    ),
+
+                "low":
+                    safe_float(
+                        row[3]
+                    ),
+
+                "close":
+                    safe_float(
+                        row[4]
+                    ),
+
+                "volume":
+                    safe_float(
+                        row[5]
+                    ),
+            }
+
+            if (
+                candle["open"] > 0
+                and
+                candle["high"] > 0
+                and
+                candle["low"] > 0
+                and
+                candle["close"] > 0
+            ):
+
+                candles.append(
+                    candle
+                )
+
+        except Exception:
+
+            continue
+
+    print(
+        "KLINES:",
+        symbol,
+        interval,
+        "COUNT:",
+        len(candles)
+    )
+
+    return candles
+
+
+# ============================================================
+# ORDER BOOK
+# ============================================================
+
+def get_order_book(
+    symbol,
+    limit=100
+):
+
+    params = {
+        "symbol":
+            normalize_symbol(symbol),
+
+        "limit":
+            limit,
+    }
+
+    data = api_get(
+        DEPTH_PATHS,
+        params=params
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+
+        return None
+
+    bids = data.get(
+        "bids",
+        []
+    )
+
+    asks = data.get(
+        "asks",
+        []
+    )
+
+    if not bids or not asks:
+
+        return None
+
+    bid_volume = 0.0
+    ask_volume = 0.0
+
+    best_bid = 0.0
+    best_ask = 0.0
+
+    for row in bids:
+
+        if len(row) < 2:
+            continue
+
+        price = safe_float(
+            row[0]
+        )
+
+        qty = safe_float(
+            row[1]
+        )
+
+        if price > best_bid:
+            best_bid = price
+
+        bid_volume += qty
+
+    for row in asks:
+
+        if len(row) < 2:
+            continue
+
+        price = safe_float(
+            row[0]
+        )
+
+        qty = safe_float(
+            row[1]
+        )
+
+        if (
+            best_ask == 0
+            or
+            price < best_ask
+        ):
+
+            best_ask = price
+
+        ask_volume += qty
+
+    total = (
+        bid_volume
+        +
+        ask_volume
+    )
+
+    if total > 0:
+
+        buy_pressure = (
+            bid_volume
+            /
+            total
+            *
+            100
+        )
+
+        sell_pressure = (
+            ask_volume
+            /
+            total
+            *
+            100
+        )
+
+    else:
+
+        buy_pressure = 50.0
+        sell_pressure = 50.0
+
+    spread = 0.0
+
+    if (
+        best_bid > 0
+        and
+        best_ask > 0
+    ):
+
+        spread = (
+            (
+                best_ask
+                -
+                best_bid
+            )
+            /
+            best_bid
+        ) * 100
+
+    return {
+        "best_bid":
+            best_bid,
+
+        "best_ask":
+            best_ask,
+
+        "bid_volume":
+            bid_volume,
+
+        "ask_volume":
+            ask_volume,
+
+        "buy_pressure":
+            buy_pressure,
+
+        "sell_pressure":
+            sell_pressure,
+
+        "spread_percent":
+            spread,
+    }
+
+
+# ============================================================
+# PART 1 COMPLETE
+# ============================================================
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - PART 1 LOADED\n"
+    " DIRECT KLINES - NO TRADES ENDPOINT\n"
+    " فقط 5 ارز | 5m + 15m\n"
+    " بدون اجرای معامله\n"
+    "===================================================="
+            )
 
     except Exception as e:
 
