@@ -1245,7 +1245,698 @@ print(
     " فقط 5 ارز | 5m + 15m\n"
     " بدون اجرای معامله\n"
     "===================================================="
+            )# ============================================================
+# PART 2 - INDICATORS
+# ============================================================
+
+def sma(values, period):
+
+    if len(values) < period:
+        return None
+
+    return (
+        sum(values[-period:])
+        / period
+    )
+
+
+def ema(values, period):
+
+    if len(values) < period:
+        return None
+
+    multiplier = 2.0 / (
+        period + 1
+    )
+
+    result = (
+        sum(values[:period])
+        / period
+    )
+
+    for value in values[period:]:
+
+        result = (
+            (
+                value - result
             )
+            * multiplier
+        ) + result
+
+    return result
+
+
+def rsi(
+    values,
+    period=14
+):
+
+    if len(values) < period + 1:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(
+        1,
+        len(values)
+    ):
+
+        change = (
+            values[i]
+            -
+            values[i - 1]
+        )
+
+        if change > 0:
+
+            gains.append(
+                change
+            )
+
+            losses.append(0.0)
+
+        else:
+
+            gains.append(0.0)
+
+            losses.append(
+                abs(change)
+            )
+
+    if len(gains) < period:
+        return None
+
+    avg_gain = (
+        sum(gains[:period])
+        /
+        period
+    )
+
+    avg_loss = (
+        sum(losses[:period])
+        /
+        period
+    )
+
+    for i in range(
+        period,
+        len(gains)
+    ):
+
+        avg_gain = (
+            (
+                avg_gain
+                *
+                (period - 1)
+            )
+            +
+            gains[i]
+        ) / period
+
+        avg_loss = (
+            (
+                avg_loss
+                *
+                (period - 1)
+            )
+            +
+            losses[i]
+        ) / period
+
+    if avg_loss == 0:
+
+        return 100.0
+
+    relative_strength = (
+        avg_gain
+        /
+        avg_loss
+    )
+
+    return (
+        100.0
+        -
+        (
+            100.0
+            /
+            (
+                1.0
+                +
+                relative_strength
+            )
+        )
+    )
+
+
+def atr(
+    candles,
+    period=14
+):
+
+    if len(candles) < period + 1:
+        return None
+
+    true_ranges = []
+
+    for i in range(
+        1,
+        len(candles)
+    ):
+
+        current = candles[i]
+
+        previous = candles[i - 1]
+
+        high = safe_float(
+            current.get("high")
+        )
+
+        low = safe_float(
+            current.get("low")
+        )
+
+        previous_close = safe_float(
+            previous.get("close")
+        )
+
+        true_range = max(
+            high - low,
+            abs(
+                high
+                -
+                previous_close
+            ),
+            abs(
+                low
+                -
+                previous_close
+            )
+        )
+
+        true_ranges.append(
+            true_range
+        )
+
+    if len(true_ranges) < period:
+        return None
+
+    return (
+        sum(
+            true_ranges[-period:]
+        )
+        /
+        period
+    )
+
+
+def macd(
+    values,
+    fast_period=12,
+    slow_period=26,
+    signal_period=9
+):
+
+    if len(values) < (
+        slow_period
+        +
+        signal_period
+    ):
+
+        return None
+
+    macd_values = []
+
+    for i in range(
+        slow_period,
+        len(values) + 1
+    ):
+
+        window = values[
+            :i
+        ]
+
+        fast = ema(
+            window,
+            fast_period
+        )
+
+        slow = ema(
+            window,
+            slow_period
+        )
+
+        if (
+            fast is None
+            or
+            slow is None
+        ):
+
+            continue
+
+        macd_values.append(
+            fast - slow
+        )
+
+    if len(macd_values) < signal_period:
+        return None
+
+    macd_line = (
+        macd_values[-1]
+    )
+
+    signal_line = ema(
+        macd_values,
+        signal_period
+    )
+
+    if signal_line is None:
+        return None
+
+    histogram = (
+        macd_line
+        -
+        signal_line
+    )
+
+    return {
+        "macd":
+            macd_line,
+
+        "signal":
+            signal_line,
+
+        "histogram":
+            histogram,
+            }# ============================================================
+# MARKET PRESSURE ANALYSIS
+# ============================================================
+
+def calculate_volume_pressure(candles):
+
+    if not candles:
+        return {
+            "buy_volume": 0.0,
+            "sell_volume": 0.0,
+            "buy_percent": 50.0,
+            "sell_percent": 50.0,
+        }
+
+    recent = candles[-20:]
+
+    buy_volume = 0.0
+    sell_volume = 0.0
+
+    for candle in recent:
+
+        volume = safe_float(
+            candle.get("volume")
+        )
+
+        if volume <= 0:
+            continue
+
+        open_price = safe_float(
+            candle.get("open")
+        )
+
+        close_price = safe_float(
+            candle.get("close")
+        )
+
+        if close_price > open_price:
+
+            buy_volume += volume
+
+        elif close_price < open_price:
+
+            sell_volume += volume
+
+        else:
+
+            buy_volume += (
+                volume * 0.5
+            )
+
+            sell_volume += (
+                volume * 0.5
+            )
+
+    total = (
+        buy_volume
+        +
+        sell_volume
+    )
+
+    if total <= 0:
+
+        return {
+            "buy_volume": 0.0,
+            "sell_volume": 0.0,
+            "buy_percent": 50.0,
+            "sell_percent": 50.0,
+        }
+
+    buy_percent = (
+        buy_volume
+        /
+        total
+        *
+        100.0
+    )
+
+    sell_percent = (
+        sell_volume
+        /
+        total
+        *
+        100.0
+    )
+
+    return {
+        "buy_volume":
+            buy_volume,
+
+        "sell_volume":
+            sell_volume,
+
+        "buy_percent":
+            buy_percent,
+
+        "sell_percent":
+            sell_percent,
+    }
+
+
+# ============================================================
+# ORDER BOOK PRESSURE
+# ============================================================
+
+def calculate_orderbook_pressure(
+    orderbook
+):
+
+    if not orderbook:
+
+        return {
+            "buy_percent": 50.0,
+            "sell_percent": 50.0,
+            "imbalance": 0.0,
+        }
+
+    buy_percent = safe_float(
+        orderbook.get(
+            "buy_pressure",
+            50.0
+        ),
+        50.0
+    )
+
+    sell_percent = safe_float(
+        orderbook.get(
+            "sell_pressure",
+            50.0
+        ),
+        50.0
+    )
+
+    total = (
+        buy_percent
+        +
+        sell_percent
+    )
+
+    if total <= 0:
+
+        buy_percent = 50.0
+        sell_percent = 50.0
+
+    else:
+
+        buy_percent = (
+            buy_percent
+            /
+            total
+            *
+            100.0
+        )
+
+        sell_percent = (
+            sell_percent
+            /
+            total
+            *
+            100.0
+        )
+
+    imbalance = (
+        buy_percent
+        -
+        sell_percent
+    ) / 100.0
+
+    return {
+        "buy_percent":
+            buy_percent,
+
+        "sell_percent":
+            sell_percent,
+
+        "imbalance":
+            imbalance,
+    }
+
+
+# ============================================================
+# TREND DETECTION
+# ============================================================
+
+def detect_trend(
+    price,
+    ema9,
+    ema21,
+    ema50
+):
+
+    if any(
+        value is None
+        for value in [
+            price,
+            ema9,
+            ema21,
+            ema50,
+        ]
+    ):
+
+        return "NEUTRAL"
+
+    if (
+        price > ema9
+        and
+        ema9 > ema21
+        and
+        ema21 > ema50
+    ):
+
+        return "BULLISH"
+
+    if (
+        price < ema9
+        and
+        ema9 < ema21
+        and
+        ema21 < ema50
+    ):
+
+        return "BEARISH"
+
+    return "NEUTRAL"
+
+
+# ============================================================
+# TIMEFRAME ANALYSIS
+# ============================================================
+
+def analyze_timeframe(
+    symbol,
+    interval,
+    candles,
+    orderbook
+):
+
+    if len(candles) < 55:
+
+        print(
+            "Not enough candles:",
+            symbol,
+            interval,
+            len(candles)
+        )
+
+        return None
+
+    closes = [
+
+        safe_float(
+            candle.get("close")
+        )
+
+        for candle in candles
+
+        if safe_float(
+            candle.get("close")
+        ) > 0
+    ]
+
+    if len(closes) < 55:
+        return None
+
+    current_price = closes[-1]
+
+    ema9 = ema(
+        closes,
+        9
+    )
+
+    ema21 = ema(
+        closes,
+        21
+    )
+
+    ema50 = ema(
+        closes,
+        50
+    )
+
+    rsi_value = rsi(
+        closes,
+        14
+    )
+
+    atr_value = atr(
+        candles,
+        14
+    )
+
+    macd_data = macd(
+        closes
+    )
+
+    volume_pressure = (
+        calculate_volume_pressure(
+            candles
+        )
+    )
+
+    book_pressure = (
+        calculate_orderbook_pressure(
+            orderbook
+        )
+    )
+
+    if (
+        ema9 is None
+        or
+        ema21 is None
+        or
+        ema50 is None
+        or
+        rsi_value is None
+        or
+        atr_value is None
+        or
+        macd_data is None
+    ):
+
+        return None
+
+    trend = detect_trend(
+        current_price,
+        ema9,
+        ema21,
+        ema50
+    )
+
+    atr_percent = 0.0
+
+    if current_price > 0:
+
+        atr_percent = (
+            atr_value
+            /
+            current_price
+            *
+            100.0
+        )
+
+    return {
+        "symbol":
+            symbol,
+
+        "interval":
+            interval,
+
+        "price":
+            current_price,
+
+        "ema9":
+            ema9,
+
+        "ema21":
+            ema21,
+
+        "ema50":
+            ema50,
+
+        "rsi":
+            rsi_value,
+
+        "atr":
+            atr_value,
+
+        "atr_percent":
+            atr_percent,
+
+        "macd":
+            macd_data["macd"],
+
+        "macd_signal":
+            macd_data["signal"],
+
+        "macd_histogram":
+            macd_data["histogram"],
+
+        "trend":
+            trend,
+
+        "buy_volume_percent":
+            volume_pressure[
+                "buy_percent"
+            ],
+
+        "sell_volume_percent":
+            volume_pressure[
+                "sell_percent"
+            ],
+
+        "book_buy_percent":
+            book_pressure[
+                "buy_percent"
+            ],
+
+        "book_sell_percent":
+            book_pressure[
+                "sell_percent"
+            ],
+
+        "book_imbalance":
+            book_pressure[
+                "imbalance"
+            ],
+
+        "candle_count":
+            len(candles),
+            }
 
     except Exception as e:
 
