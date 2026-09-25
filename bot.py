@@ -369,9 +369,9 @@ def get_depth(
 
 
 def trade_ws_worker(symbol):
-    Extract price and quantity from a Tabdeal Futures
-    WebSocket trade message.
-    """
+    symbol = normalize_symbol(symbol)
+
+    def on_message(ws, message):
 
     if not isinstance(data, dict):
         return None
