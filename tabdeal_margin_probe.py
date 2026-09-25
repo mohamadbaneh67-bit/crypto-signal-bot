@@ -2741,4 +2741,218 @@ print(
     " TABDEAL FUTURES BOT - SIGNAL STORAGE READY\n"
     " SIGNALS / DEDUP / ENTRY / SL / TP\n"
     " ===================================================="
+        )# ============================================================
+# SIGNAL RESULT CHECK
+# ============================================================
+
+def check_signal_result(signal):
+
+    if not isinstance(signal, dict):
+        return "UNKNOWN"
+
+    if signal.get("status") != "OPEN":
+        return signal.get(
+            "result",
+            "UNKNOWN"
         )
+
+    symbol = signal.get(
+        "symbol"
+    )
+
+    direction = signal.get(
+        "direction"
+    )
+
+    entry = safe_float(
+        signal.get("entry")
+    )
+
+    stop_loss = safe_float(
+        signal.get("stop_loss")
+    )
+
+    tp1 = safe_float(
+        signal.get("take_profit_1")
+    )
+
+    tp2 = safe_float(
+        signal.get("take_profit_2")
+    )
+
+    if (
+        not symbol
+        or direction not in (
+            "BUY",
+            "SELL"
+        )
+        or entry <= 0
+        or stop_loss <= 0
+        or tp1 <= 0
+        or tp2 <= 0
+    ):
+        return "UNKNOWN"
+
+    # --------------------------------------------------------
+    # دریافت قیمت فعلی Futures تبدیل
+    # --------------------------------------------------------
+
+    candles = get_klines(
+        symbol,
+        "5m",
+        3
+    )
+
+    if not candles:
+        return "PENDING"
+
+    current_price = safe_float(
+        candles[-1].get(
+            "close"
+        )
+    )
+
+    if current_price <= 0:
+        return "PENDING"
+
+    # --------------------------------------------------------
+    # BUY
+    # --------------------------------------------------------
+
+    if direction == "BUY":
+
+        if current_price <= stop_loss:
+            return "SL"
+
+        if current_price >= tp2:
+            return "TP2"
+
+        if current_price >= tp1:
+            return "TP1"
+
+    # --------------------------------------------------------
+    # SELL
+    # --------------------------------------------------------
+
+    if direction == "SELL":
+
+        if current_price >= stop_loss:
+            return "SL"
+
+        if current_price <= tp2:
+            return "TP2"
+
+        if current_price <= tp1:
+            return "TP1"
+
+    return "PENDING"
+
+
+# ============================================================
+# UPDATE OPEN SIGNALS
+# ============================================================
+
+def update_open_signals():
+
+    signals = load_signals()
+
+    changed = False
+
+    for signal in signals:
+
+        if not isinstance(
+            signal,
+            dict
+        ):
+            continue
+
+        if signal.get(
+            "status"
+        ) != "OPEN":
+
+            continue
+
+        result = check_signal_result(
+            signal
+        )
+
+        if result == "PENDING":
+            continue
+
+        if result == "UNKNOWN":
+            continue
+
+        if result == "TP1":
+
+            signal[
+                "tp1_hit"
+            ] = True
+
+            signal[
+                "status"
+            ] = "TP1"
+
+            signal[
+                "result"
+            ] = "TP1"
+
+            changed = True
+
+        elif result == "TP2":
+
+            signal[
+                "tp1_hit"
+            ] = True
+
+            signal[
+                "tp2_hit"
+            ] = True
+
+            signal[
+                "status"
+            ] = "TP2"
+
+            signal[
+                "result"
+            ] = "TP2"
+
+            changed = True
+
+        elif result == "SL":
+
+            signal[
+                "sl_hit"
+            ] = True
+
+            signal[
+                "status"
+            ] = "SL"
+
+            signal[
+                "result"
+            ] = "SL"
+
+            changed = True
+
+    if changed:
+
+        save_signals(
+            signals
+        )
+
+    return signals
+
+
+# ============================================================
+# PART 3 COMPLETE
+# ============================================================
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - PART 3 COMPLETE\n"
+    " SIGNAL RESULT TRACKING ENABLED\n"
+    " TP1 / TP2 / SL / PENDING\n"
+    " ANALYSIS ONLY - NO TRADE EXECUTION\n"
+    "===================================================="
+    )
