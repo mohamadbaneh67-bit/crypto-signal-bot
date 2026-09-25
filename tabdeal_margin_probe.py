@@ -2469,4 +2469,276 @@ print(
     " EMA / RSI / MACD / ATR / VOLUME / ORDER BOOK\n"
     " 5m + 15m ANALYSIS\n"
     "===================================================="
+    )# ============================================================
+# SIGNAL STORAGE
+# ============================================================
+
+def load_signals():
+
+    data = load_json(
+        SIGNALS_FILE,
+        []
     )
+
+    if not isinstance(
+        data,
+        list
+    ):
+
+        data = []
+
+    return data
+
+
+def save_signals(
+    signals
+):
+
+    if not isinstance(
+        signals,
+        list
+    ):
+
+        signals = []
+
+    signals = signals[
+        -MAX_STORED_SIGNALS:
+    ]
+
+    return save_json(
+        SIGNALS_FILE,
+        signals
+    )
+
+
+def is_duplicate_signal(
+    signals,
+    symbol,
+    direction
+):
+
+    now = time.time()
+
+    minimum_age = (
+        DEDUP_MINUTES
+        * 60
+    )
+
+    for signal in reversed(
+        signals
+    ):
+
+        if not isinstance(
+            signal,
+            dict
+        ):
+
+            continue
+
+        if normalize_symbol(
+            signal.get(
+                "symbol",
+                ""
+            )
+        ) != normalize_symbol(
+            symbol
+        ):
+
+            continue
+
+        if signal.get(
+            "direction"
+        ) != direction:
+
+            continue
+
+        created_at = safe_float(
+            signal.get(
+                "timestamp"
+            )
+        )
+
+        if created_at <= 0:
+            continue
+
+        if (
+            now
+            -
+            created_at
+        ) < minimum_age:
+
+            return True
+
+    return False
+
+
+def create_signal_record(
+    symbol,
+    combined,
+    analysis_5m,
+    analysis_15m
+):
+
+    if not combined:
+        return None
+
+    direction = combined.get(
+        "direction",
+        "WAIT"
+    )
+
+    if direction == "WAIT":
+        return None
+
+    price = safe_float(
+        analysis_5m.get(
+            "price"
+        )
+    )
+
+    atr_value = safe_float(
+        analysis_5m.get(
+            "atr"
+        )
+    )
+
+    targets = calculate_targets(
+        direction,
+        price,
+        atr_value
+    )
+
+    if not targets:
+        return None
+
+    score = safe_float(
+        combined.get(
+            "score"
+        )
+    )
+
+    volatility = max(
+        safe_float(
+            analysis_5m.get(
+                "atr_percent"
+            )
+        ),
+
+        safe_float(
+            analysis_15m.get(
+                "atr_percent"
+            )
+        )
+    )
+
+    leverage = suggested_leverage(
+        volatility,
+        score
+    )
+
+    fingerprint = (
+        create_signal_fingerprint(
+            symbol,
+            direction,
+            analysis_5m,
+            analysis_15m
+        )
+    )
+
+    return {
+
+        "id":
+            hashlib.sha256(
+                (
+                    fingerprint
+                    +
+                    str(
+                        time.time()
+                    )
+                ).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:24],
+
+        "timestamp":
+            time.time(),
+
+        "created_at":
+            now_iso(),
+
+        "symbol":
+            normalize_symbol(
+                symbol
+            ),
+
+        "direction":
+            direction,
+
+        "score":
+            round(
+                score,
+                2
+            ),
+
+        "entry":
+            targets[
+                "entry"
+            ],
+
+        "stop_loss":
+            targets[
+                "stop_loss"
+            ],
+
+        "take_profit_1":
+            targets[
+                "take_profit_1"
+            ],
+
+        "take_profit_2":
+            targets[
+                "take_profit_2"
+            ],
+
+        "suggested_leverage":
+            leverage,
+
+        "volatility_percent":
+            round(
+                volatility,
+                4
+            ),
+
+        "pattern_id":
+            fingerprint,
+
+        "status":
+            "OPEN",
+
+        "result":
+            "PENDING",
+
+        "tp1_hit":
+            False,
+
+        "tp2_hit":
+            False,
+
+        "sl_hit":
+            False,
+
+        "analysis_5m":
+            analysis_5m,
+
+        "analysis_15m":
+            analysis_15m,
+    }
+
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - SIGNAL STORAGE READY\n"
+    " SIGNALS / DEDUP / ENTRY / SL / TP\n"
+    " ===================================================="
+        )
