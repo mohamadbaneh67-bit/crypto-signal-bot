@@ -2088,7 +2088,142 @@ def calculate_signal_strength(
 
 # ============================================================
 # PART 2 LOADED
+# ============================================================# ============================================================
+# MULTI TIMEFRAME ANALYSIS
 # ============================================================
+
+def combine_timeframes(
+    analysis_5m,
+    analysis_15m
+):
+
+    if not analysis_5m or not analysis_15m:
+        return None
+
+    buy_5m = safe_float(
+        analysis_5m.get(
+            "buy_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    buy_15m = safe_float(
+        analysis_15m.get(
+            "buy_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    sell_5m = safe_float(
+        analysis_5m.get(
+            "sell_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    sell_15m = safe_float(
+        analysis_15m.get(
+            "sell_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    buy_score_5m = calculate_signal_strength(
+        analysis_5m
+    )
+
+    buy_score_15m = calculate_signal_strength(
+        analysis_15m
+    )
+
+    buy_score = (
+        buy_score_5m["buy_score"] * 0.45
+        +
+        buy_score_15m["buy_score"] * 0.55
+    )
+
+    sell_score = (
+        buy_score_5m["sell_score"] * 0.45
+        +
+        buy_score_15m["sell_score"] * 0.55
+    )
+
+    direction = "WAIT"
+
+    score = max(
+        buy_score,
+        sell_score
+    )
+
+    if (
+        buy_score >= MIN_SIGNAL_SCORE
+        and
+        buy_score > sell_score
+    ):
+
+        direction = "BUY"
+        score = buy_score
+
+    elif (
+        sell_score >= MIN_SIGNAL_SCORE
+        and
+        sell_score > buy_score
+    ):
+
+        direction = "SELL"
+        score = sell_score
+
+    return {
+        "direction":
+            direction,
+
+        "score":
+            round(
+                score,
+                2
+            ),
+
+        "buy_score":
+            round(
+                buy_score,
+                2
+            ),
+
+        "sell_score":
+            round(
+                sell_score,
+                2
+            ),
+
+        "buy_volume_5m":
+            buy_5m,
+
+        "buy_volume_15m":
+            buy_15m,
+
+        "sell_volume_5m":
+            sell_5m,
+
+        "sell_volume_15m":
+            sell_15m,
+    }
+
+
+# ============================================================
+# PART 2 - MULTI TIMEFRAME READY
+# ============================================================
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - MULTI TIMEFRAME READY\n"
+    " 5m + 15m COMBINED ANALYSIS\n"
+    "===================================================="
+    )
 
 print(
     "\n"
