@@ -331,15 +331,40 @@ def get_depth(
         return None
 
     try:
-
         bid_qty = sum(
             safe_float(x[1])
             for x in bids[:50]
         )
 
-        def trade_ws_worker(symbol):
-    """    except Exception:
+        ask_qty = sum(
+            safe_float(x[1])
+            for x in asks[:50]
+        )
+
+    except Exception:
         return None
+
+    total_qty = bid_qty + ask_qty
+
+    if total_qty <= 0:
+        return None
+
+    imbalance = (
+        (bid_qty - ask_qty)
+        / total_qty
+    )
+
+    return {
+        "symbol": normalize_symbol(symbol),
+        "bid_qty": bid_qty,
+        "ask_qty": ask_qty,
+        "imbalance": imbalance,
+        "timestamp": time.time(),
+    }
+
+
+def trade_ws_worker(symbol):
+    """
     Listen for Tabdeal Futures trade broadcasts.
 
     The public broadcast may use different JSON wrappers,
