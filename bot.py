@@ -368,6 +368,8 @@ def get_depth(
     return None
 
 
+
+
 def trade_ws_worker(symbol):
     symbol = normalize_symbol(symbol)
 
