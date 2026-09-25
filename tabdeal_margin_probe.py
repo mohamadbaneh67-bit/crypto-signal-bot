@@ -1945,4 +1945,156 @@ def analyze_timeframe(
             e
         )
 
-    return False
+    return False# ============================================================
+# PART 2 - FINAL CHECK
+# ============================================================
+
+def calculate_signal_strength(
+    analysis
+):
+
+    if not analysis:
+        return 0
+
+    buy_score = 0
+    sell_score = 0
+
+    price = safe_float(
+        analysis.get("price")
+    )
+
+    ema9 = safe_float(
+        analysis.get("ema9")
+    )
+
+    ema21 = safe_float(
+        analysis.get("ema21")
+    )
+
+    ema50 = safe_float(
+        analysis.get("ema50")
+    )
+
+    rsi_value = safe_float(
+        analysis.get("rsi"),
+        50.0
+    )
+
+    macd_histogram = safe_float(
+        analysis.get(
+            "macd_histogram"
+        )
+    )
+
+    buy_volume = safe_float(
+        analysis.get(
+            "buy_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    sell_volume = safe_float(
+        analysis.get(
+            "sell_volume_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    book_buy = safe_float(
+        analysis.get(
+            "book_buy_percent",
+            50.0
+        ),
+        50.0
+    )
+
+    book_sell = safe_float(
+        analysis.get(
+            "book_sell_percent",
+            50.0
+        ),
+        50.0
+    )
+
+
+    # --------------------------------------------------------
+    # BUY CONDITIONS
+    # --------------------------------------------------------
+
+    if price > ema9:
+        buy_score += 10
+
+    if ema9 > ema21:
+        buy_score += 15
+
+    if ema21 > ema50:
+        buy_score += 15
+
+    if rsi_value >= 50:
+        buy_score += 10
+
+    if 50 <= rsi_value <= 68:
+        buy_score += 10
+
+    if macd_histogram > 0:
+        buy_score += 10
+
+    if buy_volume > 55:
+        buy_score += 10
+
+    if book_buy > 55:
+        buy_score += 10
+
+
+    # --------------------------------------------------------
+    # SELL CONDITIONS
+    # --------------------------------------------------------
+
+    if price < ema9:
+        sell_score += 10
+
+    if ema9 < ema21:
+        sell_score += 15
+
+    if ema21 < ema50:
+        sell_score += 15
+
+    if rsi_value <= 50:
+        sell_score += 10
+
+    if 32 <= rsi_value <= 50:
+        sell_score += 10
+
+    if macd_histogram < 0:
+        sell_score += 10
+
+    if sell_volume > 55:
+        sell_score += 10
+
+    if book_sell > 55:
+        sell_score += 10
+
+
+    return {
+        "buy_score":
+            buy_score,
+
+        "sell_score":
+            sell_score,
+    }
+
+
+# ============================================================
+# PART 2 LOADED
+# ============================================================
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - PART 2 LOADED\n"
+    " EMA / RSI / MACD / ATR / VOLUME / ORDER BOOK\n"
+    " 5m + 15m ANALYSIS\n"
+    "===================================================="
+    )
