@@ -2223,7 +2223,244 @@ print(
     " TABDEAL FUTURES BOT - MULTI TIMEFRAME READY\n"
     " 5m + 15m COMBINED ANALYSIS\n"
     "===================================================="
+    )# ============================================================
+# PART 3 - SIGNAL TARGETS
+# ============================================================
+
+def calculate_targets(
+    direction,
+    price,
+    atr_value
+):
+
+    price = safe_float(
+        price
     )
+
+    atr_value = safe_float(
+        atr_value
+    )
+
+    if price <= 0 or atr_value <= 0:
+        return None
+
+    if direction == "BUY":
+
+        stop_loss = (
+            price
+            -
+            (
+                atr_value
+                * SL_ATR
+            )
+        )
+
+        take_profit_1 = (
+            price
+            +
+            (
+                atr_value
+                * TP1_ATR
+            )
+        )
+
+        take_profit_2 = (
+            price
+            +
+            (
+                atr_value
+                * TP2_ATR
+            )
+        )
+
+    elif direction == "SELL":
+
+        stop_loss = (
+            price
+            +
+            (
+                atr_value
+                * SL_ATR
+            )
+        )
+
+        take_profit_1 = (
+            price
+            -
+            (
+                atr_value
+                * TP1_ATR
+            )
+        )
+
+        take_profit_2 = (
+            price
+            -
+            (
+                atr_value
+                * TP2_ATR
+            )
+        )
+
+    else:
+
+        return None
+
+    return {
+        "entry":
+            price,
+
+        "stop_loss":
+            stop_loss,
+
+        "take_profit_1":
+            take_profit_1,
+
+        "take_profit_2":
+            take_profit_2,
+
+        "risk":
+            abs(
+                price
+                -
+                stop_loss
+            ),
+
+        "reward_tp1":
+            abs(
+                take_profit_1
+                -
+                price
+            ),
+
+        "reward_tp2":
+            abs(
+                take_profit_2
+                -
+                price
+            ),
+    }
+
+
+# ============================================================
+# LEVERAGE SUGGESTION
+# ============================================================
+
+def suggested_leverage(
+    volatility_percent,
+    score
+):
+
+    volatility_percent = safe_float(
+        volatility_percent
+    )
+
+    score = safe_float(
+        score
+    )
+
+    if score < MIN_SIGNAL_SCORE:
+        return 1
+
+    if volatility_percent <= 0.25:
+        return 10
+
+    if volatility_percent <= 0.45:
+        return 7
+
+    if volatility_percent <= 0.75:
+        return 5
+
+    if volatility_percent <= 1.20:
+        return 3
+
+    return 2
+
+
+# ============================================================
+# SIGNAL FINGERPRINT
+# ============================================================
+
+def create_signal_fingerprint(
+    symbol,
+    direction,
+    analysis_5m,
+    analysis_15m
+):
+
+    values = [
+
+        normalize_symbol(
+            symbol
+        ),
+
+        direction,
+
+        analysis_5m.get(
+            "trend",
+            "NEUTRAL"
+        ),
+
+        analysis_15m.get(
+            "trend",
+            "NEUTRAL"
+        ),
+
+        str(
+            round(
+                safe_float(
+                    analysis_5m.get(
+                        "rsi",
+                        50
+                    )
+                ),
+                1
+            )
+        ),
+
+        str(
+            round(
+                safe_float(
+                    analysis_15m.get(
+                        "rsi",
+                        50
+                    )
+                ),
+                1
+            )
+        ),
+
+        str(
+            round(
+                safe_float(
+                    analysis_5m.get(
+                        "macd_histogram",
+                        0
+                    ),
+                ),
+                6
+            )
+        ),
+    ]
+
+    raw = "|".join(
+        values
+    )
+
+    return hashlib.sha256(
+        raw.encode(
+            "utf-8"
+        )
+    ).hexdigest()[:24]
+
+
+print(
+    "\n"
+    "====================================================\n"
+    " TABDEAL FUTURES BOT - PART 3 LOADED\n"
+    " ENTRY / SL / TP1 / TP2 / LEVERAGE\n"
+    " ===================================================="
+        )
 
 print(
     "\n"
