@@ -365,6 +365,10 @@ def get_depth(
         "timestamp": time.time(),
     }
     def trade_ws_worker(symbol):
+  
+    
+    
+    
     return None
 
 
