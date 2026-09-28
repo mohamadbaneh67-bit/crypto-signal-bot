@@ -603,6 +603,290 @@ def extract_book(
         source.get("asks")
         or source.get("A")
         or source.get("sell")
+def get_depth(
+    symbol
+):
+    data = api_get(
+        DEPTH_URL,
+        {
+            "symbol": normalize_symbol(symbol),
+            "limit": 50,
+        }
+    )
+
+    if not isinstance(data, dict):
+        return None
+
+    bids = data.get("bids") or []
+    asks = data.get("asks") or []
+
+    if not bids or not asks:
+        return None
+
+    try:
+        bid_qty = sum(
+            safe_float(x[1])
+            for x in bids[:50]
+        )
+
+        ask_qty = sum(
+            safe_float(x[1])
+            for x in asks[:50]
+        )
+
+    except Exception as exc:
+        print("DEPTH PARSE ERROR:", exc)
+        return None
+
+    total_qty = bid_qty + ask_qty
+
+    if total_qty <= 0:
+        return None
+
+    imbalance = (
+        (bid_qty - ask_qty)
+        / total_qty
+    )
+
+    best_bid = safe_float(bids[0][0])
+    best_ask = safe_float(asks[0][0])
+
+    price = (
+        (best_bid + best_ask) / 2
+        if best_bid > 0 and best_ask > 0
+        else 0.0
+    )
+
+    return {
+        "symbol": normalize_symbol(symbol),
+        "bid_qty": bid_qty,
+        "ask_qty": ask_qty,
+        "imbalance": imbalance,
+        "price": price,
+        "timestamp": time.time(),
+    }
+
+
+def extract_trade(
+    payload,
+    subscribed_symbol=None
+):
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    data = payload.get("data")
+
+    if isinstance(data, dict):
+        source = data
+    else:
+        source = payload
+
+    symbol = normalize_symbol(
+        source.get("symbol")
+        or source.get("s")
+        or payload.get("symbol")
+        or payload.get("s")
+        or subscribed_symbol
+    )
+
+    if (
+        subscribed_symbol
+        and symbol != normalize_symbol(subscribed_symbol)
+    ):
+        return None
+
+    price = (
+        source.get("p")
+        or source.get("price")
+        or source.get("P")
+    )
+
+    quantity = (
+        source.get("q")
+        or source.get("quantity")
+        or source.get("Q")
+        or 0
+    )
+
+    timestamp = (
+        source.get("T")
+        or source.get("E")
+        or source.get("timestamp")
+        or int(time.time() * 1000)
+    )
+
+    price = safe_float(price)
+    quantity = safe_float(quantity)
+    timestamp = safe_float(timestamp)
+
+    if price <= 0:
+        return None
+
+    if timestamp > 100000000000:
+        timestamp = timestamp / 1000.0
+
+    return {
+        "symbol": symbol,
+        "price": price,
+        "quantity": quantity,
+        "timestamp": timestamp,
+    }
+
+
+def trade_ws_worker(symbol):
+    symbol = normalize_symbol(symbol)
+
+    def on_message(ws, message):
+        trade = extract_trade(
+            message,
+            symbol
+        )
+
+        if trade is None:
+            return
+
+        with state_lock:
+            trades = run_state[
+                "trades"
+            ].setdefault(
+                symbol,
+                []
+            )
+
+            trades.append(trade)
+
+            if len(trades) > MAX_TRADES_PER_SYMBOL:
+                del trades[
+                    :-MAX_TRADES_PER_SYMBOL
+                ]
+
+    def on_error(ws, error):
+        print(
+            f"TRADE WS ERROR [{symbol}]:",
+            error
+        )
+
+    def on_close(
+        ws,
+        close_status_code,
+        close_msg
+    ):
+        print(
+            f"TRADE WS CLOSED [{symbol}]",
+            close_status_code,
+            close_msg
+        )
+
+    def on_open(ws):
+        print(
+            f"TRADE WS CONNECTED [{symbol}]"
+        )
+
+        request = {
+            "method": "SUBSCRIBE",
+            "params": [
+                f"{symbol.lower()}@trade"
+            ],
+            "id": int(
+                time.time() * 1000
+            ) % 1000000,
+        }
+
+        try:
+            ws.send(
+                json.dumps(request)
+            )
+
+            print(
+                "TRADE WS SUBSCRIBE:",
+                request
+            )
+
+        except Exception as exc:
+            print(
+                "TRADE WS SEND ERROR:",
+                exc
+            )
+
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                TRADE_WS_URL,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+
+            ws.run_forever(
+                ping_interval=20,
+                ping_timeout=10
+            )
+
+        except Exception as exc:
+            print(
+                f"TRADE WS EXCEPTION [{symbol}]:",
+                exc
+            )
+
+        print(
+            f"Reconnecting trade WS [{symbol}]..."
+        )
+
+        time.sleep(5)
+
+
+def extract_book(
+    payload,
+    subscribed_symbol
+):
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    data = payload.get("data")
+
+    if isinstance(data, dict):
+        source = data
+    else:
+        source = payload
+
+    symbol = normalize_symbol(
+        source.get("symbol")
+        or source.get("s")
+        or payload.get("symbol")
+        or payload.get("s")
+        or subscribed_symbol
+    )
+
+    if (
+        symbol
+        != normalize_symbol(subscribed_symbol)
+    ):
+        return None
+
+    bids = (
+        source.get("bids")
+        or source.get("B")
+        or source.get("buy")
+        or []
+    )
+
+    asks = (
+        source.get("asks")
+        or source.get("A")
+        or source.get("sell")
         or []
     )
 
@@ -610,82 +894,58 @@ def extract_book(
         return None
 
     try:
-
         bid_qty = sum(
-
-            safe_float(
-                item[1]
-            )
-
+            safe_float(item[1])
             for item in bids[:50]
         )
 
         ask_qty = sum(
-
-            safe_float(
-                item[1]
-            )
-
+            safe_float(item[1])
             for item in asks[:50]
         )
 
-        def trade_ws_worker(symbol):
-    return None
+        best_bid = safe_float(
+            bids[0][0]
+        )
+
         best_ask = safe_float(
             asks[0][0]
         )
 
-    except Exception:
-
+    except Exception as exc:
+        print(
+            "BOOK PARSE ERROR:",
+            exc
+        )
         return None
 
     total_qty = (
-        bid_qty
-        + ask_qty
+        bid_qty + ask_qty
     )
 
     if total_qty <= 0:
         return None
 
     imbalance = (
-
         (bid_qty - ask_qty)
         / total_qty
     )
 
     price = (
-
-        (best_bid + best_ask)
-        / 2
-
+        (best_bid + best_ask) / 2
         if best_bid > 0
         and best_ask > 0
-
         else 0.0
     )
 
     return {
-
-        "symbol":
-            symbol,
-
-        "price":
-            price,
-
-        "imbalance":
-            imbalance,
-
-        "bid_qty":
-            bid_qty,
-
-        "ask_qty":
-            ask_qty,
-
-        "timestamp":
-            time.time(),
+        "symbol": symbol,
+        "price": price,
+        "imbalance": imbalance,
+        "bid_qty": bid_qty,
+        "ask_qty": ask_qty,
+        "timestamp": time.time(),
     }
-
-
 def book_ws_worker(symbol):
 
     symbol = normalize_symbol(
