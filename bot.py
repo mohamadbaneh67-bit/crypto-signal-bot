@@ -344,7 +344,7 @@ def get_depth(
             for x in asks[:50]
         )
 
-    except Exception:
+        except Exception:
         return None
 
     total_qty = bid_qty + ask_qty
@@ -357,7 +357,7 @@ def get_depth(
         / total_qty
     )
 
-        return {
+    return {
         "symbol": normalize_symbol(symbol),
         "bid_qty": bid_qty,
         "ask_qty": ask_qty,
@@ -371,8 +371,8 @@ def trade_ws_worker(symbol):
 
     def on_message(ws, message):
 
-    if not isinstance(data, dict):
-        return None
+        if not isinstance(data, dict):
+            return None
 
     payload = data.get("data", data)
 
