@@ -344,9 +344,6 @@ def get_depth(
             for x in asks[:50]
         )
 
-        except Exception:
-        return None
-
     total_qty = bid_qty + ask_qty
 
     if total_qty <= 0:
