@@ -357,21 +357,13 @@ def get_depth(
         / total_qty
     )
 
-    return {
+        return {
         "symbol": normalize_symbol(symbol),
         "bid_qty": bid_qty,
         "ask_qty": ask_qty,
         "imbalance": imbalance,
         "timestamp": time.time(),
     }
-    def trade_ws_worker(symbol):
-  
-    
-    
-    
-    return None
-
-
 
 
 def trade_ws_worker(symbol):
