@@ -633,10 +633,8 @@ def extract_book(
             for item in asks[:50]
         )
 
-        best_bid = safe_float(
-            bids[0][0]
-        )
-
+        def trade_ws_worker(symbol):
+    return None
         best_ask = safe_float(
             asks[0][0]
         )
