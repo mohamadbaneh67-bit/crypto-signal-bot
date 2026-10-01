@@ -1,0 +1,26 @@
+name: Test Tabdeal Futures Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests websocket-client
+
+      - name: Run Futures connection test
+        run: |
+          python tabdeal_futures_connection_test.py
