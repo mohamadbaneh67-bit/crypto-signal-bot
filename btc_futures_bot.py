@@ -2,42 +2,57 @@ import os
 import json
 import time
 import hashlib
+import threading
 import requests
+import websocket
+
 from datetime import datetime, timezone
 
 
-# ==========================================
-# تنظیمات اصلی ربات
-# ==========================================
+# =========================================================
+# BTCUSDT TABDEAL FUTURES SIGNAL BOT
+# =========================================================
 
 SYMBOL = "BTCUSDT"
 
-API_BASE = "https://api1.tabdeal.org"
+# ---------------------------------------------------------
+# Futures WebSocket رسمی تبدیل
+# ---------------------------------------------------------
 
-DEPTH_PATH = "/r/fapi/v1/depth"
-EXCHANGE_INFO_PATH = "/r/fapi/v1/exchangeInfo"
+WS_URL = "wss://api1.tabdeal.org/special_margin/stream/"
+
+WS_STREAM = "btcusdt@depth@2000ms"
+
+# ---------------------------------------------------------
+# Telegram
+# ---------------------------------------------------------
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# ---------------------------------------------------------
+# فایل‌های ذخیره اطلاعات
+# ---------------------------------------------------------
+
 SNAPSHOT_FILE = "btc_futures_snapshots.json"
 SIGNALS_FILE = "btc_futures_signals.json"
 
-
-# ==========================================
-# تنظیمات جمع‌آوری داده
-# ==========================================
+# ---------------------------------------------------------
+# تنظیمات
+# ---------------------------------------------------------
 
 MAX_SNAPSHOTS = 50000
 MAX_SIGNALS = 3000
 
 COLLECTION_SECONDS = 20
-REQUEST_TIMEOUT = 15
+WS_TIMEOUT = 10
 
+MIN_SCORE = 72.0
+DUPLICATE_MINUTES = 60
 
-# ==========================================
+# ---------------------------------------------------------
 # تایم‌فریم‌ها
-# ==========================================
+# ---------------------------------------------------------
 
 TIMEFRAMES = {
     "5m": 300,
@@ -49,10 +64,9 @@ TIMEFRAMES = {
     "1w": 604800,
 }
 
-
-# ==========================================
+# ---------------------------------------------------------
 # وزن تایم‌فریم‌ها
-# ==========================================
+# ---------------------------------------------------------
 
 TF_WEIGHT = {
     "1w": 2.0,
@@ -65,18 +79,9 @@ TF_WEIGHT = {
 }
 
 
-# ==========================================
-# تنظیمات سیگنال
-# ==========================================
-
-MIN_SCORE = 72.0
-
-DUPLICATE_MINUTES = 60
-
-
-# ==========================================
-# توابع عمومی
-# ==========================================
+# =========================================================
+# ابزارهای عمومی
+# =========================================================
 
 def now_utc():
     return datetime.now(timezone.utc).isoformat()
@@ -89,121 +94,25 @@ def safe_float(value, default=0.0):
         return default
 
 
-def api_get(path, params=None):
-    url = API_BASE + path
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=REQUEST_TIMEOUT,
-    )
-
-    response.raise_for_status()
-
-    return response.json()
-
-
-# ==========================================
-# بررسی بازار Futures
-# ==========================================
-
-def check_futures_market():
-
-    data = api_get(
-        EXCHANGE_INFO_PATH,
-        {"symbol": SYMBOL},
-    )
-
-    return data
-
-
-# ==========================================
-# دریافت Order Book
-# ==========================================
-
-def get_depth_snapshot():
-
-    data = api_get(
-        DEPTH_PATH,
-        {
-            "symbol": SYMBOL,
-            "limit": 50,
-        },
-    )
-
-    bids = data.get("bids", [])
-    asks = data.get("asks", [])
-
-    if not bids or not asks:
-        raise ValueError("Order Book خالی است")
-
-    best_bid = safe_float(bids[0][0])
-    best_ask = safe_float(asks[0][0])
-
-    bid_qty = sum(
-        safe_float(item[1])
-        for item in bids
-    )
-
-    ask_qty = sum(
-        safe_float(item[1])
-        for item in asks
-    )
-
-    total_qty = bid_qty + ask_qty
-
-    if total_qty <= 0:
-        imbalance = 0.0
-    else:
-        imbalance = (
-            (bid_qty - ask_qty)
-            / total_qty
-        )
-
-    mid_price = (
-        best_bid + best_ask
-    ) / 2
-
-    return {
-        "symbol": SYMBOL,
-        "timestamp": time.time(),
-        "datetime": now_utc(),
-        "best_bid": best_bid,
-        "best_ask": best_ask,
-        "price": mid_price,
-        "bid_qty": bid_qty,
-        "ask_qty": ask_qty,
-        "imbalance": imbalance,
-}# ==========================================
-# ذخیره و خواندن اطلاعات
-# ==========================================
+# =========================================================
+# JSON
+# =========================================================
 
 def load_json_file(filename, default):
-
     if not os.path.exists(filename):
         return default
 
     try:
-        with open(
-            filename,
-            "r",
-            encoding="utf-8",
-        ) as f:
+        with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
-
     except Exception:
         return default
 
 
 def save_json_file(filename, data):
-
     temp_file = filename + ".tmp"
 
-    with open(
-        temp_file,
-        "w",
-        encoding="utf-8",
-    ) as f:
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(
             data,
             f,
@@ -211,45 +120,184 @@ def save_json_file(filename, data):
             indent=2,
         )
 
-    os.replace(
-        temp_file,
-        filename,
-    )
+    os.replace(temp_file, filename)
 
 
-# ==========================================
-# جمع‌آوری Snapshot های بازار
-# ==========================================
+# =========================================================
+# پردازش Order Book
+# =========================================================
+
+def process_orderbook(data):
+    if not isinstance(data, dict):
+        return None
+
+    bids = data.get("bids", [])
+    asks = data.get("asks", [])
+
+    if not bids or not asks:
+        return None
+
+    try:
+        best_bid = safe_float(bids[0][0])
+        best_ask = safe_float(asks[0][0])
+
+        if best_bid <= 0 or best_ask <= 0:
+            return None
+
+        bid_qty = sum(
+            safe_float(item[1])
+            for item in bids
+            if len(item) >= 2
+        )
+
+        ask_qty = sum(
+            safe_float(item[1])
+            for item in asks
+            if len(item) >= 2
+        )
+
+        total_qty = bid_qty + ask_qty
+
+        if total_qty > 0:
+            imbalance = (
+                (bid_qty - ask_qty)
+                / total_qty
+            )
+        else:
+            imbalance = 0.0
+
+        mid_price = (
+            best_bid + best_ask
+        ) / 2
+
+        return {
+            "symbol": SYMBOL,
+            "timestamp": time.time(),
+            "datetime": now_utc(),
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "price": mid_price,
+            "bid_qty": bid_qty,
+            "ask_qty": ask_qty,
+            "imbalance": imbalance,
+        }
+
+    except Exception as e:
+        print("خطا در پردازش Order Book:", e)
+        return None
+
+
+# =========================================================
+# دریافت Futures از WebSocket
+# =========================================================
 
 def collect_snapshots():
-
     snapshots = []
+
+    finished = threading.Event()
+
+    def on_message(ws, message):
+        try:
+            data = json.loads(message)
+
+            # پیام‌های تأیید Subscribe را نادیده می‌گیریم
+            if isinstance(data, dict):
+                if "result" in data:
+                    return
+
+            snapshot = process_orderbook(data)
+
+            if snapshot:
+                snapshots.append(snapshot)
+
+                print(
+                    "داده دریافت شد | Price:",
+                    snapshot["price"],
+                    "| Imbalance:",
+                    round(snapshot["imbalance"], 4),
+                )
+
+        except Exception as e:
+            print("خطا در پردازش پیام WebSocket:", e)
+
+    def on_error(ws, error):
+        print("WebSocket error:", error)
+
+    def on_close(ws, close_status_code, close_msg):
+        print(
+            "WebSocket بسته شد:",
+            close_status_code,
+            close_msg,
+        )
+        finished.set()
+
+    def on_open(ws):
+        print("اتصال Futures WebSocket برقرار شد.")
+
+        subscribe_message = {
+            "method": "SUBSCRIBE",
+            "params": [WS_STREAM],
+            "id": 1,
+        }
+
+        ws.send(
+            json.dumps(subscribe_message)
+        )
+
+        print(
+            "Subscribe ارسال شد:",
+            WS_STREAM,
+        )
+
+    ws = websocket.WebSocketApp(
+        WS_URL,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+    )
+
+    def run_ws():
+        try:
+            ws.run_forever(
+                ping_interval=15,
+                ping_timeout=5,
+            )
+        except Exception as e:
+            print("خطای اجرای WebSocket:", e)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(
+        target=run_ws,
+        daemon=True,
+    )
+
+    thread.start()
 
     start_time = time.time()
 
     while time.time() - start_time < COLLECTION_SECONDS:
+        time.sleep(1)
 
-        try:
+    try:
+        ws.close()
+    except Exception:
+        pass
 
-            snapshot = get_depth_snapshot()
+    finished.wait(timeout=3)
 
-            snapshots.append(snapshot)
-
-        except Exception as e:
-
-            print(
-                "خطا در دریافت داده:",
-                e,
-            )
-
-        time.sleep(5)
+    print(
+        "تعداد Snapshot دریافت‌شده:",
+        len(snapshots),
+    )
 
     return snapshots
 
 
-# ==========================================
-# اضافه کردن Snapshot های جدید
-# ==========================================
+# =========================================================
+# ذخیره Snapshot
+# =========================================================
 
 def append_snapshots(new_snapshots):
 
@@ -261,13 +309,9 @@ def append_snapshots(new_snapshots):
     if not isinstance(old_snapshots, list):
         old_snapshots = []
 
-    old_snapshots.extend(
-        new_snapshots
-    )
+    old_snapshots.extend(new_snapshots)
 
-    # حذف داده‌های خیلی قدیمی
     if len(old_snapshots) > MAX_SNAPSHOTS:
-
         old_snapshots = old_snapshots[
             -MAX_SNAPSHOTS:
         ]
@@ -280,11 +324,14 @@ def append_snapshots(new_snapshots):
     return old_snapshots
 
 
-# ==========================================
-# ساخت کندل از Snapshot ها
-# ==========================================
+# =========================================================
+# ساخت کندل
+# =========================================================
 
-def build_candles(snapshots, timeframe_seconds):
+def build_candles(
+    snapshots,
+    timeframe_seconds,
+):
 
     if not snapshots:
         return []
@@ -348,24 +395,23 @@ def build_candles(snapshots, timeframe_seconds):
     return candles
 
 
-# ==========================================
-# ساخت تمام تایم‌فریم‌ها
-# ==========================================
-
 def build_all_timeframes(snapshots):
 
     result = {}
 
-    for name, seconds in TIMEFRAMES.items():
+    for timeframe, seconds in TIMEFRAMES.items():
 
-        result[name] = build_candles(
+        result[timeframe] = build_candles(
             snapshots,
             seconds,
         )
 
-    return result# ==========================================
+    return result
+
+
+# =========================================================
 # EMA
-# ==========================================
+# =========================================================
 
 def ema(values, period):
 
@@ -374,9 +420,10 @@ def ema(values, period):
 
     multiplier = 2 / (period + 1)
 
-    result = sum(
-        values[:period]
-    ) / period
+    result = (
+        sum(values[:period])
+        / period
+    )
 
     for price in values[period:]:
 
@@ -389,9 +436,9 @@ def ema(values, period):
     return result
 
 
-# ==========================================
+# =========================================================
 # RSI
-# ==========================================
+# =========================================================
 
 def rsi(values, period=14):
 
@@ -409,14 +456,13 @@ def rsi(values, period=14):
         )
 
         if change > 0:
-
             gains.append(change)
             losses.append(0)
-
         else:
-
             gains.append(0)
-            losses.append(abs(change))
+            losses.append(
+                abs(change)
+            )
 
     avg_gain = (
         sum(gains[:period])
@@ -434,12 +480,18 @@ def rsi(values, period=14):
     ):
 
         avg_gain = (
-            (avg_gain * (period - 1))
+            (
+                avg_gain
+                * (period - 1)
+            )
             + gains[i]
         ) / period
 
         avg_loss = (
-            (avg_loss * (period - 1))
+            (
+                avg_loss
+                * (period - 1)
+            )
             + losses[i]
         ) / period
 
@@ -453,9 +505,9 @@ def rsi(values, period=14):
     )
 
 
-# ==========================================
+# =========================================================
 # ATR
-# ==========================================
+# =========================================================
 
 def atr(candles, period=14):
 
@@ -475,8 +527,14 @@ def atr(candles, period=14):
 
         tr = max(
             high - low,
-            abs(high - previous_close),
-            abs(low - previous_close),
+            abs(
+                high
+                - previous_close
+            ),
+            abs(
+                low
+                - previous_close
+            ),
         )
 
         true_ranges.append(tr)
@@ -490,36 +548,72 @@ def atr(candles, period=14):
     )
 
 
-# ==========================================
-# MACD Histogram
-# ==========================================
+# =========================================================
+# MACD واقعی‌تر
+# =========================================================
 
 def macd_histogram(values):
 
     if len(values) < 35:
         return None
 
-    ema12 = ema(
-        values,
-        12,
-    )
+    ema12_values = []
+    ema26_values = []
 
-    ema26 = ema(
-        values,
+    for i in range(
         26,
-    )
+        len(values) + 1,
+    ):
 
-    if ema12 is None or ema26 is None:
+        part = values[:i]
+
+        e12 = ema(
+            part,
+            12,
+        )
+
+        e26 = ema(
+            part,
+            26,
+        )
+
+        if e12 is not None and e26 is not None:
+            ema12_values.append(e12)
+            ema26_values.append(e26)
+
+    if not ema12_values:
         return None
 
-    macd_value = ema12 - ema26
+    macd_values = []
 
-    return macd_value
+    for a, b in zip(
+        ema12_values,
+        ema26_values,
+    ):
+        macd_values.append(
+            a - b
+        )
+
+    if len(macd_values) < 9:
+        return macd_values[-1]
+
+    signal_line = ema(
+        macd_values,
+        9,
+    )
+
+    if signal_line is None:
+        return macd_values[-1]
+
+    return (
+        macd_values[-1]
+        - signal_line
+    )
 
 
-# ==========================================
+# =========================================================
 # تحلیل یک تایم‌فریم
-# ==========================================
+# =========================================================
 
 def analyze_timeframe(
     timeframe,
@@ -537,7 +631,9 @@ def analyze_timeframe(
         }
 
     closes = [
-        safe_float(c["close"])
+        safe_float(
+            c["close"]
+        )
         for c in candles
     ]
 
@@ -564,36 +660,40 @@ def analyze_timeframe(
     )
 
     macd = macd_histogram(
-        closes,
+        closes
     )
 
-    score_long = 0.0
-    score_short = 0.0
+    long_score = 0.0
+    short_score = 0.0
 
     reasons_long = []
     reasons_short = []
 
-
-    # --------------------------------------
-    # EMA20 / EMA50
-    # --------------------------------------
+    # -----------------------------------------------------
+    # EMA20
+    # -----------------------------------------------------
 
     if ema20 is not None:
 
         if current_price > ema20:
 
-            score_long += 20
+            long_score += 20
+
             reasons_long.append(
                 "قیمت بالای EMA20"
             )
 
         elif current_price < ema20:
 
-            score_short += 20
+            short_score += 20
+
             reasons_short.append(
                 "قیمت زیر EMA20"
             )
 
+    # -----------------------------------------------------
+    # EMA20 / EMA50
+    # -----------------------------------------------------
 
     if (
         ema20 is not None
@@ -602,35 +702,44 @@ def analyze_timeframe(
 
         if ema20 > ema50:
 
-            score_long += 25
+            long_score += 25
+
             reasons_long.append(
                 "روند EMA صعودی"
             )
 
         elif ema20 < ema50:
 
-            score_short += 25
+            short_score += 25
+
             reasons_short.append(
                 "روند EMA نزولی"
             )
 
-
-    # --------------------------------------
+    # -----------------------------------------------------
     # RSI
-    # --------------------------------------
+    # -----------------------------------------------------
 
     if current_rsi is not None:
 
-        if 50 < current_rsi < 70:
+        if (
+            current_rsi > 50
+            and current_rsi < 70
+        ):
 
-            score_long += 15
+            long_score += 15
+
             reasons_long.append(
                 f"RSI صعودی ({current_rsi:.1f})"
             )
 
-        elif 30 < current_rsi < 50:
+        elif (
+            current_rsi >= 30
+            and current_rsi < 50
+        ):
 
-            score_short += 15
+            short_score += 15
+
             reasons_short.append(
                 f"RSI نزولی ({current_rsi:.1f})"
             )
@@ -647,57 +756,60 @@ def analyze_timeframe(
                 f"RSI اشباع فروش ({current_rsi:.1f})"
             )
 
-
-    # --------------------------------------
+    # -----------------------------------------------------
     # MACD
-    # --------------------------------------
+    # -----------------------------------------------------
 
     if macd is not None:
 
         if macd > 0:
 
-            score_long += 15
+            long_score += 15
+
             reasons_long.append(
                 "MACD مثبت"
             )
 
         elif macd < 0:
 
-            score_short += 15
+            short_score += 15
+
             reasons_short.append(
                 "MACD منفی"
             )
 
+    # -----------------------------------------------------
+    # نتیجه
+    # -----------------------------------------------------
 
-    # --------------------------------------
-    # نتیجه تایم‌فریم
-    # --------------------------------------
-
-    if score_long > score_short:
+    if long_score > short_score:
 
         direction = "LONG"
-        score = score_long
+        score = long_score
         reasons = reasons_long
 
-    elif score_short > score_long:
+    elif short_score > long_score:
 
         direction = "SHORT"
-        score = score_short
+        score = short_score
         reasons = reasons_short
 
     else:
 
         direction = "WAIT"
         score = 0.0
+
         reasons = [
             "قدرت خرید و فروش برابر است"
         ]
 
-
     return {
         "timeframe": timeframe,
         "direction": direction,
-        "score": round(score, 2),
+        "score": round(
+            score,
+            2,
+        ),
         "price": current_price,
         "ema20": ema20,
         "ema50": ema50,
@@ -706,17 +818,24 @@ def analyze_timeframe(
         "macd": macd,
         "reasons": reasons,
         "candles": len(candles),
-          }# ==========================================
-# ترکیب تحلیل تایم‌فریم‌ها
-# ==========================================
+    }
 
-def combine_analysis(analyses, orderbook):
+
+# =========================================================
+# ترکیب تایم‌فریم‌ها
+# =========================================================
+
+def combine_analysis(
+    analyses,
+    orderbook,
+):
 
     if not analyses:
+
         return {
             "direction": "WAIT",
             "score": 0.0,
-            "reason": "تحلیل تایم‌فریم‌ها موجود نیست",
+            "reason": "تحلیل موجود نیست",
         }
 
     long_score = 0.0
@@ -745,7 +864,9 @@ def combine_analysis(analyses, orderbook):
 
         if direction == "LONG":
 
-            long_score += score * weight
+            long_score += (
+                score * weight
+            )
 
             long_reasons.append(
                 f"{timeframe}: "
@@ -761,7 +882,9 @@ def combine_analysis(analyses, orderbook):
 
         elif direction == "SHORT":
 
-            short_score += score * weight
+            short_score += (
+                score * weight
+            )
 
             short_reasons.append(
                 f"{timeframe}: "
@@ -775,10 +898,9 @@ def combine_analysis(analyses, orderbook):
 
             valid_count += 1
 
-
-    # ======================================
-    # بررسی Order Book
-    # ======================================
+    # -----------------------------------------------------
+    # Order Book
+    # -----------------------------------------------------
 
     imbalance = safe_float(
         orderbook.get(
@@ -802,10 +924,9 @@ def combine_analysis(analyses, orderbook):
             "قدرت بیشتر سفارش‌های فروش"
         )
 
-
-    # ======================================
-    # اگر داده کافی نیست
-    # ======================================
+    # -----------------------------------------------------
+    # داده ناکافی
+    # -----------------------------------------------------
 
     if valid_count < 3:
 
@@ -826,11 +947,6 @@ def combine_analysis(analyses, orderbook):
             ),
         }
 
-
-    # ======================================
-    # بررسی اختلاف دو طرف
-    # ======================================
-
     total_score = (
         long_score
         + short_score
@@ -841,17 +957,14 @@ def combine_analysis(analyses, orderbook):
         return {
             "direction": "WAIT",
             "score": 0.0,
-            "reason": (
-                "قدرت سیگنال کافی نیست"
-            ),
+            "reason": "قدرت سیگنال کافی نیست",
             "long_score": 0.0,
             "short_score": 0.0,
         }
 
-
-    # --------------------------------------
+    # -----------------------------------------------------
     # LONG
-    # --------------------------------------
+    # -----------------------------------------------------
 
     if long_score > short_score:
 
@@ -865,9 +978,6 @@ def combine_analysis(analyses, orderbook):
             / total_score
         ) * 100
 
-        # اگر اختلاف خیلی کم باشد
-        # وارد معامله نمی‌شویم
-
         if confidence < 15:
 
             return {
@@ -886,67 +996,9 @@ def combine_analysis(analyses, orderbook):
                 ),
                 "short_score": round(
                     short_score,
-                    2,
-                ),
-            }
-
-        return {
-            "direction": "LONG",
-            "score": round(
-                confidence,
-                2,
-            ),
-            "reason": " | ".join(
-                long_reasons
-            ),
-            "long_score": round(
-                long_score,
-                2,
-            ),
-            "short_score": round(
-                short_score,
-                2,
-            ),
-        }
-
-
-    # --------------------------------------
-    # SHORT
-    # --------------------------------------
-
-    if short_score > long_score:
-
-        difference = (
-            short_score
-            - long_score
-        )
-
-        confidence = (
-            difference
-            / total_score
-        ) * 100
-
-        if confidence < 15:
-
-            return {
-                "direction": "WAIT",
-                "score": round(
-                    confidence,
-                    2,
-                ),
-                "reason": (
-                    "تایم‌فریم‌ها "
-                    "با یکدیگر اختلاف دارند"
-                ),
-                "long_score": round(
-                    long_score,
-                    2,
-                ),
-                "short_score": round(
-                    short_score,
-                    2,
-                ),
-            }
+         2,
+    ),
+}
 
         return {
             "direction": "SHORT",
@@ -967,13 +1019,10 @@ def combine_analysis(analyses, orderbook):
             ),
         }
 
-
     return {
         "direction": "WAIT",
         "score": 0.0,
-        "reason": (
-            "بازار جهت مشخصی ندارد"
-        ),
+        "reason": "بازار جهت مشخصی ندارد",
         "long_score": round(
             long_score,
             2,
@@ -985,9 +1034,9 @@ def combine_analysis(analyses, orderbook):
     }
 
 
-# ==========================================
-# محاسبه Entry / Stop / TP
-# ==========================================
+# =========================================================
+# Entry / Stop / TP
+# =========================================================
 
 def calculate_targets(
     direction,
@@ -1001,6 +1050,7 @@ def calculate_targets(
     )
 
     if entry <= 0 or atr_value <= 0:
+
         return {
             "entry": entry,
             "stop": None,
@@ -1013,25 +1063,17 @@ def calculate_targets(
     if direction == "LONG":
 
         stop = entry - risk
-
-        tp1 = entry + (
-            risk * 1.0
-        )
-
+        tp1 = entry + risk
         tp2 = entry + (
-            risk * 2.0
+            risk * 2
         )
 
     elif direction == "SHORT":
 
         stop = entry + risk
-
-        tp1 = entry - (
-            risk * 1.0
-        )
-
+        tp1 = entry - risk
         tp2 = entry - (
-            risk * 2.0
+            risk * 2
         )
 
     else:
@@ -1048,31 +1090,39 @@ def calculate_targets(
         "stop": stop,
         "tp1": tp1,
         "tp2": tp2,
-  }# ==========================================
-# ساخت شناسه یکتا برای سیگنال
-# ==========================================
+    }
+
+
+# =========================================================
+# Fingerprint
+# =========================================================
 
 def signal_fingerprint(signal):
 
-    raw = "|".join([
-        str(signal.get("symbol", "")),
-        str(signal.get("direction", "")),
-        str(signal.get("entry", "")),
-        str(signal.get("stop", "")),
-        str(signal.get("tp1", "")),
-        str(signal.get("tp2", "")),
-    ])
+    raw = "|".join(
+        [
+            str(signal.get("symbol", "")),
+            str(signal.get("direction", "")),
+            str(signal.get("entry", "")),
+            str(signal.get("stop", "")),
+            str(signal.get("tp1", "")),
+            str(signal.get("tp2", "")),
+        ]
+    )
 
     return hashlib.sha256(
         raw.encode("utf-8")
     ).hexdigest()
 
 
-# ==========================================
-# بررسی سیگنال تکراری
-# ==========================================
+# =========================================================
+# Duplicate
+# =========================================================
 
-def is_duplicate_signal(signal, history):
+def is_duplicate_signal(
+    signal,
+    history,
+):
 
     fingerprint = signal_fingerprint(
         signal
@@ -1082,7 +1132,10 @@ def is_duplicate_signal(signal, history):
 
     for old in reversed(history):
 
-        if old.get("fingerprint") != fingerprint:
+        if (
+            old.get("fingerprint")
+            != fingerprint
+        ):
             continue
 
         old_time = safe_float(
@@ -1102,9 +1155,9 @@ def is_duplicate_signal(signal, history):
     return False
 
 
-# ==========================================
-# ذخیره سیگنال
-# ==========================================
+# =========================================================
+# Save signal
+# =========================================================
 
 def save_signal(signal):
 
@@ -1121,7 +1174,6 @@ def save_signal(signal):
     )
 
     signal["timestamp"] = time.time()
-
     signal["created_at"] = now_utc()
 
     history.append(signal)
@@ -1140,9 +1192,9 @@ def save_signal(signal):
     return signal
 
 
-# ==========================================
-# ساخت سیگنال نهایی
-# ==========================================
+# =========================================================
+# Create signal
+# =========================================================
 
 def create_signal(
     combined,
@@ -1193,11 +1245,6 @@ def create_signal(
             "created_at": now_utc(),
         }
 
-
-    # ======================================
-    # پیدا کردن ATR تایم‌فریم 5 دقیقه
-    # ======================================
-
     entry_analysis = analyses.get(
         "5m",
         {},
@@ -1211,9 +1258,6 @@ def create_signal(
         entry_analysis.get("atr")
     )
 
-    # اگر ATR پنج دقیقه‌ای موجود نبود
-    # از 15 دقیقه استفاده می‌کنیم
-
     if atr_value <= 0:
 
         atr_value = safe_float(
@@ -1223,15 +1267,13 @@ def create_signal(
             ).get("atr")
         )
 
-
     targets = calculate_targets(
         direction,
         entry,
         atr_value,
     )
 
-
-    signal = {
+    return {
         "status": "SIGNAL",
         "symbol": SYMBOL,
         "direction": direction,
@@ -1264,12 +1306,10 @@ def create_signal(
         "created_at": now_utc(),
     }
 
-    return signal
 
-
-# ==========================================
-# فرمت قیمت
-# ==========================================
+# =========================================================
+# Price format
+# =========================================================
 
 def format_price(value):
 
@@ -1290,9 +1330,9 @@ def format_price(value):
     return f"{value:.10f}"
 
 
-# ==========================================
-# ساخت پیام تلگرام
-# ==========================================
+# =========================================================
+# Telegram message
+# =========================================================
 
 def build_telegram_message(signal):
 
@@ -1310,14 +1350,12 @@ def build_telegram_message(signal):
     else:
         title = "🟡 WAIT"
 
-
     message = (
         "📊 BTCUSDT Futures - Tabdeal\n"
         "━━━━━━━━━━━━━━━━━━\n"
         f"{title}\n"
         f"امتیاز: {signal.get('score', 0):.1f}\n"
     )
-
 
     if direction != "WAIT":
 
@@ -1330,7 +1368,6 @@ def build_telegram_message(signal):
             "━━━━━━━━━━━━━━━━━━\n"
         )
 
-
     message += (
         "دلیل تحلیل:\n"
         f"{signal.get('reason', 'ندارد')}\n"
@@ -1338,18 +1375,29 @@ def build_telegram_message(signal):
         f"زمان: {signal.get('created_at', '-')}"
     )
 
-    return message# ==========================================
-# ارسال پیام به تلگرام
-# ==========================================
+    return message
+
+
+# =========================================================
+# Telegram
+# =========================================================
 
 def send_telegram_message(message):
 
     if not TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN تنظیم نشده")
+
+        print(
+            "TELEGRAM_BOT_TOKEN تنظیم نشده"
+        )
+
         return False
 
     if not TELEGRAM_CHAT_ID:
-        print("TELEGRAM_CHAT_ID تنظیم نشده")
+
+        print(
+            "TELEGRAM_CHAT_ID تنظیم نشده"
+        )
+
         return False
 
     url = (
@@ -1368,10 +1416,14 @@ def send_telegram_message(message):
         response = requests.post(
             url,
             json=payload,
-            timeout=REQUEST_TIMEOUT,
+            timeout=15,
         )
 
         response.raise_for_status()
+
+        print(
+            "پیام تلگرام ارسال شد."
+        )
 
         return True
 
@@ -1385,9 +1437,9 @@ def send_telegram_message(message):
         return False
 
 
-# ==========================================
-# اجرای یک مرحله تحلیل
-# ==========================================
+# =========================================================
+# Main analysis
+# =========================================================
 
 def run_analysis():
 
@@ -1395,74 +1447,50 @@ def run_analysis():
         "شروع تحلیل BTCUSDT Futures..."
     )
 
-    # --------------------------------------
-    # بررسی بازار
-    # --------------------------------------
+    print(
+        "اتصال به Futures WebSocket تبدیل..."
+    )
 
-    try:
+    # -----------------------------------------------------
+    # دریافت داده
+    # -----------------------------------------------------
 
-        market = check_futures_market()
+    new_snapshots = collect_snapshots()
+
+    if not new_snapshots:
 
         print(
-            "اتصال به Futures تبدیل برقرار است."
+            "هیچ داده‌ای از Futures دریافت نشد."
         )
 
-        print(
-            "Market:",
-            market,
-        )
-
-    except Exception as e:
-
-        print(
-            "خطا در اتصال به Futures:",
-            e,
+        send_telegram_message(
+            "⚠️ BTCUSDT Futures Tabdeal\n"
+            "داده بازار از WebSocket دریافت نشد."
         )
 
         return
-
-
-    # --------------------------------------
-    # جمع‌آوری داده جدید
-    # --------------------------------------
-
-    print(
-        "در حال جمع‌آوری داده بازار..."
-    )
-
-    new_snapshots = collect_snapshots()
 
     print(
         "تعداد داده جدید:",
         len(new_snapshots),
     )
 
-    if not new_snapshots:
-
-        print(
-            "داده‌ای دریافت نشد."
-        )
-
-        return
-
-
-    # --------------------------------------
-    # ذخیره داده‌ها
-    # --------------------------------------
+    # -----------------------------------------------------
+    # ذخیره
+    # -----------------------------------------------------
 
     all_snapshots = append_snapshots(
         new_snapshots
     )
 
     print(
-        "کل Snapshot های ذخیره‌شده:",
+        "کل Snapshot ها:",
         len(all_snapshots),
     )
 
-
-    # --------------------------------------
-    # ساخت تایم‌فریم‌ها
-    # --------------------------------------
+    # -----------------------------------------------------
+    # ساخت تایم‌فریم
+    # -----------------------------------------------------
 
     timeframe_candles = (
         build_all_timeframes(
@@ -1470,10 +1498,9 @@ def run_analysis():
         )
     )
 
-
-    # --------------------------------------
-    # تحلیل هر تایم‌فریم
-    # --------------------------------------
+    # -----------------------------------------------------
+    # تحلیل
+    # -----------------------------------------------------
 
     analyses = {}
 
@@ -1496,60 +1523,64 @@ def run_analysis():
             )
         )
 
+    # -----------------------------------------------------
+    # آخرین Order Book
+    # -----------------------------------------------------
 
-    # --------------------------------------
-    # دریافت آخرین Order Book
-    # --------------------------------------
+    latest_orderbook = (
+        new_snapshots[-1]
+    )
 
-    try:
-
-        orderbook = get_depth_snapshot()
-
-    except Exception as e:
-
-        print(
-            "خطا در دریافت Order Book:",
-            e,
-        )
-
-        return
-
-
-    # --------------------------------------
-    # ترکیب تحلیل‌ها
-    # --------------------------------------
+    # -----------------------------------------------------
+    # ترکیب
+    # -----------------------------------------------------
 
     combined = combine_analysis(
         analyses,
-        orderbook,
+        latest_orderbook,
     )
-
 
     print(
         "جهت نهایی:",
-        combined.get("direction"),
+        combined.get(
+            "direction"
+        ),
     )
 
     print(
         "امتیاز:",
-        combined.get("score"),
+        combined.get(
+            "score"
+        ),
     )
 
+    print(
+        "Long:",
+        combined.get(
+            "long_score"
+        ),
+    )
 
-    # --------------------------------------
+    print(
+        "Short:",
+        combined.get(
+            "short_score"
+        ),
+    )
+
+    # -----------------------------------------------------
     # ساخت سیگنال
-    # --------------------------------------
+    # -----------------------------------------------------
 
     signal = create_signal(
         combined,
         analyses,
-        orderbook,
+        latest_orderbook,
     )
 
-
-    # --------------------------------------
-    # اگر WAIT باشد
-    # --------------------------------------
+    # -----------------------------------------------------
+    # WAIT
+    # -----------------------------------------------------
 
     if signal.get("status") == "WAIT":
 
@@ -1564,8 +1595,10 @@ def run_analysis():
             )
         )
 
-        message = build_telegram_message(
-            signal
+        message = (
+            build_telegram_message(
+                signal
+            )
         )
 
         send_telegram_message(
@@ -1574,10 +1607,9 @@ def run_analysis():
 
         return
 
-
-    # --------------------------------------
-    # بررسی تکراری نبودن
-    # --------------------------------------
+    # -----------------------------------------------------
+    # Duplicate
+    # -----------------------------------------------------
 
     history = load_json_file(
         SIGNALS_FILE,
@@ -1590,48 +1622,48 @@ def run_analysis():
     ):
 
         print(
-            "این سیگنال قبلاً ثبت شده است."
+            "سیگنال تکراری است."
         )
 
         return
 
-
-    # --------------------------------------
-    # ذخیره سیگنال جدید
-    # --------------------------------------
+    # -----------------------------------------------------
+    # Save
+    # -----------------------------------------------------
 
     save_signal(signal)
 
+    # -----------------------------------------------------
+    # Telegram
+    # -----------------------------------------------------
 
-    # --------------------------------------
-    # ارسال تلگرام
-    # --------------------------------------
-
-    message = build_telegram_message(
-        signal
+    message = (
+        build_telegram_message(
+            signal
+        )
     )
 
     sent = send_telegram_message(
         message
     )
 
-
     if sent:
 
         print(
-            "سیگنال با موفقیت به تلگرام ارسال شد."
+            "سیگنال با موفقیت ارسال شد."
         )
 
     else:
 
         print(
-            "سیگنال ساخته شد اما ارسال تلگرام ناموفق بود."
+            "سیگنال ساخته شد ولی "
+            "ارسال تلگرام ناموفق بود."
         )
 
 
-# ==========================================
-# نقطه شروع برنامه
-# ==========================================
+# =========================================================
+# MAIN
+# =========================================================
 
 def main():
 
@@ -1660,5 +1692,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
