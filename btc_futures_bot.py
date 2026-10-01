@@ -193,17 +193,32 @@ def process_orderbook(data):
 
 def collect_snapshots():
     snapshots = []
-
-    finished = threading.Event()
+    stop_event = threading.Event()
+    message_count = 0
+    reconnect_count = 0
 
     def on_message(ws, message):
+        nonlocal message_count
+
+        message_count += 1
+
         try:
+            print(
+                f"WebSocket message #{message_count}:",
+                message[:1000] if isinstance(message, str) else message
+            )
+
             data = json.loads(message)
 
-            # پیام‌های تأیید Subscribe را نادیده می‌گیریم
-            if isinstance(data, dict):
-                if "result" in data:
-                    return
+            # پاسخ Subscribe
+            if isinstance(data, dict) and "result" in data:
+                print("پاسخ Subscribe:", data)
+                return
+
+            # پیام خطای سرور
+            if isinstance(data, dict) and "error" in data:
+                print("خطای سرور WebSocket:", data)
+                return
 
             snapshot = process_orderbook(data)
 
@@ -211,17 +226,16 @@ def collect_snapshots():
                 snapshots.append(snapshot)
 
                 print(
-                    "داده دریافت شد | Price:",
-                    snapshot["price"],
-                    "| Imbalance:",
-                    round(snapshot["imbalance"], 4),
+                    "داده Futures دریافت شد | "
+                    f"Price: {snapshot['price']} | "
+                    f"Imbalance: {snapshot['imbalance']:.4f}"
                 )
 
         except Exception as e:
-            print("خطا در پردازش پیام WebSocket:", e)
+            print("خطا در پردازش پیام WebSocket:", repr(e))
 
     def on_error(ws, error):
-        print("WebSocket error:", error)
+        print("WebSocket error:", repr(error))
 
     def on_close(ws, close_status_code, close_msg):
         print(
@@ -229,7 +243,6 @@ def collect_snapshots():
             close_status_code,
             close_msg,
         )
-        finished.set()
 
     def on_open(ws):
         print("اتصال Futures WebSocket برقرار شد.")
@@ -240,36 +253,62 @@ def collect_snapshots():
             "id": 1,
         }
 
-        ws.send(
-            json.dumps(subscribe_message)
-        )
-
-        print(
-            "Subscribe ارسال شد:",
-            WS_STREAM,
-        )
-
-    ws = websocket.WebSocketApp(
-        WS_URL,
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close,
-    )
-
-    def run_ws():
         try:
-            ws.run_forever(
-                ping_interval=15,
-                ping_timeout=5,
+            ws.send(json.dumps(subscribe_message))
+            print(
+                "Subscribe ارسال شد:",
+                WS_STREAM
             )
         except Exception as e:
-            print("خطای اجرای WebSocket:", e)
-        finally:
-            finished.set()
+            print(
+                "خطا هنگام ارسال Subscribe:",
+                repr(e)
+            )
+
+    def run_connection():
+        nonlocal reconnect_count
+
+        while not stop_event.is_set():
+
+            reconnect_count += 1
+
+            print(
+                f"تلاش اتصال WebSocket شماره "
+                f"{reconnect_count}"
+            )
+
+            ws = websocket.WebSocketApp(
+                WS_URL,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+
+            try:
+                ws.run_forever(
+                    ping_interval=30,
+                    ping_timeout=10,
+                )
+
+            except Exception as e:
+                print(
+                    "خطای اجرای WebSocket:",
+                    repr(e)
+                )
+
+            if stop_event.is_set():
+                break
+
+            print(
+                "اتصال قطع شد؛ "
+                "تلاش برای اتصال مجدد..."
+            )
+
+            time.sleep(2)
 
     thread = threading.Thread(
-        target=run_ws,
+        target=run_connection,
         daemon=True,
     )
 
@@ -277,19 +316,32 @@ def collect_snapshots():
 
     start_time = time.time()
 
-    while time.time() - start_time < COLLECTION_SECONDS:
+    while (
+        time.time() - start_time
+        < COLLECTION_SECONDS
+    ):
         time.sleep(1)
 
+        # اگر داده گرفتیم، اتصال را حفظ می‌کنیم
+        # تا پایان زمان جمع‌آوری
+
+    stop_event.set()
+
     try:
-        ws.close()
+        print("در حال بستن WebSocket...")
     except Exception:
         pass
 
-    finished.wait(timeout=3)
+    thread.join(timeout=5)
+
+    print(
+        "تعداد پیام‌های خام دریافت‌شده:",
+        message_count
+    )
 
     print(
         "تعداد Snapshot دریافت‌شده:",
-        len(snapshots),
+        len(snapshots)
     )
 
     return snapshots
